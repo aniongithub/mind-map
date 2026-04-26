@@ -1,3 +1,7 @@
 # Build artifact
 /mind-map
+
+# Wiki database files
 .mind-map.db
+.mind-map.db-shm
+.mind-map.db-wal
