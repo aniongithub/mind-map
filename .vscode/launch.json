@@ -17,7 +17,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata"],
+            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
             "buildFlags": "-tags=sqlite_fts5",
             "env": {
                 "CGO_ENABLED": "1"
@@ -30,7 +30,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata"],
+            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
             "buildFlags": "-tags=sqlite_fts5",
             "env": {
                 "CGO_ENABLED": "1"
