@@ -1,7 +1,7 @@
 ---
 title: Welcome
 ---
-# Welcome to mind-map
+# Welcome to mind-map!
 
 This is a test wiki for development.
 

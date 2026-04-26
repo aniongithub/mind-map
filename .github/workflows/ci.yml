@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    name: Check & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test in devcontainer
+        uses: devcontainers/ci@v0.3
+        with:
+          push: never
+          runCmd: |
+            set -e
+
+            # Build webui
+            cd webui && npm install && npm run build && cd ..
+
+            # Go checks
+            CGO_ENABLED=1 go vet -tags sqlite_fts5 ./...
+            CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
+            CGO_ENABLED=1 go build -tags sqlite_fts5 -o /tmp/mind-map ./cmd/mind-map/
