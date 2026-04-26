@@ -1,38 +1,62 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Build",
-      "type": "shell",
-      "command": "CGO_ENABLED=1 go build -tags sqlite_fts5 -o ${workspaceFolder}/mind-map ./cmd/mind-map/",
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "problemMatcher": ["$go"]
-    },
-    {
-      "label": "Test",
-      "type": "shell",
-      "command": "CGO_ENABLED=1 go test -v -tags sqlite_fts5 ./...",
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
-      "problemMatcher": ["$go"]
-    },
-    {
-      "label": "Test (wiki only)",
-      "type": "shell",
-      "command": "CGO_ENABLED=1 go test -v -tags sqlite_fts5 ./internal/wiki/...",
-      "group": "test",
-      "problemMatcher": ["$go"]
-    },
-    {
-      "label": "Tidy",
-      "type": "shell",
-      "command": "go mod tidy",
-      "problemMatcher": []
-    }
-  ]
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-webui",
+            "type": "npm",
+            "script": "build",
+            "path": "webui",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "detail": "Build WebUI with webpack"
+        },
+        {
+            "label": "watch-webui",
+            "type": "npm",
+            "script": "dev",
+            "path": "webui",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "isBackground": true,
+            "problemMatcher": [],
+            "detail": "Watch WebUI with webpack"
+        },
+        {
+            "label": "build-go",
+            "type": "shell",
+            "command": "CGO_ENABLED=1 go build -tags sqlite_fts5 -o ${workspaceFolder}/mind-map ./cmd/mind-map/",
+            "group": "build",
+            "problemMatcher": ["$go"],
+            "detail": "Build Go binary"
+        },
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "CGO_ENABLED=1 go test -v -tags sqlite_fts5 ./...",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": ["$go"]
+        },
+        {
+            "label": "waitForServer",
+            "type": "shell",
+            "command": "while ! nc -z localhost 8080; do sleep 1; done",
+            "group": "none",
+            "dependsOn": ["build-webui"],
+            "problemMatcher": {
+                "base": "$tsc",
+                "background": {
+                    "beginsPattern": ".*",
+                    "endsPattern": ".*"
+                }
+            }
+        }
+    ]
 }

@@ -62,7 +62,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sseHandler)
-	// TODO: serve static Preact app at /
+
+	// Serve the webui from webui/dist/ (during development)
+	webDir := "webui/dist"
+	if _, err := os.Stat(webDir); err == nil {
+		mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	} else {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
+				<h1>mind-map</h1><p>WebUI not built. Run <code>npm run build</code> in <code>webui/</code></p>
+			</body></html>`)
+		})
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

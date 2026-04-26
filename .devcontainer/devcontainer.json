@@ -16,16 +16,15 @@
     }
   },
   "postCreateCommand": "go version && node --version",
+  "postAttachCommand": "npm install --prefix webui",
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.Go",
-        "golang.go-nightly",
         "hbenl.vscode-test-explorer",
         "ethan-reesor.vscode-go-test-adapter",
-        "ms-azuretools.vscode-containers",
-        "redhat.vscode-yaml",
-        "esbenp.prettier-vscode",
+        "idered.npm",
+        "qwtel.sqlite-viewer",
         "dbaeumer.vscode-eslint"
       ],
       "settings": {
@@ -36,6 +35,13 @@
           "CGO_ENABLED": "1"
         }
       }
+    }
+  },
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "mind-map Server",
+      "onAutoForward": "notify"
     }
   }
 }
