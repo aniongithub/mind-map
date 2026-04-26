@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
 
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
@@ -50,10 +53,33 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
 	}
 
-	// TODO: HTTP/SSE transport + static web app serving
+	// HTTP/SSE mode
 	addr, _ := cmd.Flags().GetString("addr")
+
+	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+		return s.MCPServer()
+	}, nil)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", sseHandler)
+	// TODO: serve static Preact app at /
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	server := &http.Server{Addr: addr, Handler: mux}
+
 	fmt.Fprintf(os.Stderr, "mind-map server on %s (wiki: %s)\n", addr, w.Root())
-	fmt.Fprintln(os.Stderr, "HTTP/SSE mode not yet implemented — use --stdio for now")
+	fmt.Fprintf(os.Stderr, "MCP SSE endpoint: http://localhost%s/mcp\n", addr)
+
+	go func() {
+		<-ctx.Done()
+		server.Close()
+	}()
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
 	return nil
 }
 
