@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Serve (stdio)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/mind-map",
+      "args": ["serve", "--stdio", "--dir", "${workspaceFolder}/testdata"],
+      "buildFlags": "-tags=sqlite_fts5",
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Serve (HTTP)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/mind-map",
+      "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata"],
+      "buildFlags": "-tags=sqlite_fts5",
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    },
+    {
+      "name": "Test (all)",
+      "type": "go",
+      "request": "launch",
+      "mode": "test",
+      "program": "${workspaceFolder}/internal/wiki",
+      "buildFlags": "-tags=sqlite_fts5",
+      "env": {
+        "CGO_ENABLED": "1"
+      }
+    }
+  ]
+}

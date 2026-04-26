@@ -15,5 +15,27 @@
       "version": "latest"
     }
   },
-  "postCreateCommand": "go version && node --version"
+  "postCreateCommand": "go version && node --version",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.Go",
+        "golang.go-nightly",
+        "hbenl.vscode-test-explorer",
+        "ethan-reesor.vscode-go-test-adapter",
+        "ms-azuretools.vscode-containers",
+        "redhat.vscode-yaml",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ],
+      "settings": {
+        "go.buildTags": "sqlite_fts5",
+        "go.testTags": "sqlite_fts5",
+        "go.buildFlags": ["-tags=sqlite_fts5"],
+        "go.testEnvVars": {
+          "CGO_ENABLED": "1"
+        }
+      }
+    }
+  }
 }
