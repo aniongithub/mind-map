@@ -10,14 +10,17 @@ set -euo pipefail
 
 REPO="aniongithub/mind-map"
 INSTALL_DIR="${HOME}/.local/bin"
+SKIP_MCP_CONFIG=false
 
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --install-dir)  INSTALL_DIR="$2"; shift 2 ;;
+    --install-dir)       INSTALL_DIR="$2"; shift 2 ;;
+    --skip-mcp-config)   SKIP_MCP_CONFIG=true; shift ;;
     --help|-h)
-      echo "Usage: install.sh [--install-dir DIR]"
-      echo "  --install-dir  Installation directory (default: ~/.local/bin)"
+      echo "Usage: install.sh [--install-dir DIR] [--skip-mcp-config]"
+      echo "  --install-dir       Installation directory (default: ~/.local/bin)"
+      echo "  --skip-mcp-config   Skip MCP client configuration (used by install.ps1)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -98,6 +101,18 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo ""
   echo "Note: ${INSTALL_DIR} is not in your PATH. Add it with:"
   echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+fi
+
+# ---------------------------------------------------------------------------
+# Auto-configure MCP clients (skipped when called from install.ps1)
+# ---------------------------------------------------------------------------
+
+if [ "$SKIP_MCP_CONFIG" = true ]; then
+  echo ""
+  echo "==> Skipping MCP client configuration (--skip-mcp-config)"
+  echo ""
+  echo "Done! mind-map binary is installed."
+  exit 0
 fi
 
 # Configure MCP clients
