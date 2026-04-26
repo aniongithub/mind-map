@@ -8,9 +8,11 @@ RUN apt-get update \
         curl \
         wget \
         pkg-config \
+        libssl-dev \
         ca-certificates \
         git \
         git-lfs \
+        netcat-traditional \
         sudo \
     && git lfs install \
     && apt-get clean \
