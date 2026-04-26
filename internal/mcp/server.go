@@ -79,26 +79,26 @@ func (s *Server) registerTools() {
 // --- Tool input types ---
 
 type searchInput struct {
-	Query string `json:"query" jsonschema:"description=Search query string"`
-	Limit int    `json:"limit,omitempty" jsonschema:"description=Maximum results (default 20)"`
+	Query string `json:"query" jsonschema:"search query string"`
+	Limit int    `json:"limit,omitempty" jsonschema:"maximum results, default 20"`
 }
 
 type pagePathInput struct {
-	Path string `json:"path" jsonschema:"description=Page path without .md extension (e.g. projects/mind-map)"`
+	Path string `json:"path" jsonschema:"page path without .md extension, e.g. projects/mind-map"`
 }
 
 type createInput struct {
-	Path    string `json:"path" jsonschema:"description=Page path without .md extension"`
-	Content string `json:"content" jsonschema:"description=Markdown content (optionally with YAML frontmatter)"`
+	Path    string `json:"path" jsonschema:"page path without .md extension"`
+	Content string `json:"content" jsonschema:"markdown content, optionally with YAML frontmatter"`
 }
 
 type updateInput struct {
-	Path    string `json:"path" jsonschema:"description=Page path without .md extension"`
-	Content string `json:"content" jsonschema:"description=New markdown content"`
+	Path    string `json:"path" jsonschema:"page path without .md extension"`
+	Content string `json:"content" jsonschema:"new markdown content"`
 }
 
 type listInput struct {
-	Prefix string `json:"prefix,omitempty" jsonschema:"description=Filter pages by path prefix"`
+	Prefix string `json:"prefix,omitempty" jsonschema:"filter pages by path prefix"`
 }
 
 // --- Tool handlers ---
