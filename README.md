@@ -37,7 +37,7 @@ Agent: "What do we know about authentication?"
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aniongithub/mind-map/main/install.sh | bash
+curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/install.sh | bash
 ```
 
 ### Windows (via WSL)
