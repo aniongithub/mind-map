@@ -164,21 +164,31 @@ The wiki engine extracts:
 
 Development happens inside a [dev container](https://containers.dev/) — a reproducible, containerized environment defined by `.devcontainer/devcontainer.json`. This means no local Go or Node install required; everything runs in the container.
 
-You can manage the devcontainer with the [devcontainer CLI](https://github.com/devcontainers/cli), [DevPod](https://devpod.sh/), or [GitHub Codespaces](https://github.com/features/codespaces). If you use AI coding agents, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp) lets the agent spin up and work inside the container directly.
+You can manage the devcontainer with VS Code, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp), or the [devcontainer CLI](https://github.com/devcontainers/cli).
 
-```bash
-# Open in VS Code — it will prompt to reopen in the devcontainer
-code .
+### VS Code (recommended)
 
-# Or clone and open directly in a devcontainer
-# VS Code: Ctrl+Shift+P → "Dev Containers: Clone Repository in Container Volume"
-```
+Open the repo in VS Code — it will prompt to reopen in the devcontainer. Or clone directly into one:
 
-Once inside the container, everything is ready:
+> `Ctrl+Shift+P` → **Dev Containers: Clone Repository in Container Volume**
+
+Once inside, everything is ready:
 
 - **`Ctrl+Shift+B`** — build webui (default build task)
 - **`F5`** with **`mind-map + WebUI`** — starts the Go server + opens Chrome
 - **`watch-webui`** task — webpack watch for live reload
+
+### devcontainer-mcp
+
+If you use AI coding agents, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp) lets the agent spin up and work inside the container directly — no manual setup.
+
+### CLI
+
+```bash
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . bash -c "cd webui && npm install && npm run build"
+devcontainer exec --workspace-folder . bash -c "CGO_ENABLED=1 go test -tags sqlite_fts5 ./..."
+```
 
 ### CI/CD
 
