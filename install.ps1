@@ -166,6 +166,29 @@ if (Test-Path "$env:USERPROFILE\.cursor") {
 }
 
 # ---------------------------------------------------------------------------
+# 4. Install SKILL.md for agent discovery
+# ---------------------------------------------------------------------------
+
+Write-Step "Installing SKILL.md for agent discovery..."
+
+$SkillUrl = "https://raw.githubusercontent.com/$Repo/main/SKILL.md"
+$SkillDirs = @(
+    "$env:USERPROFILE\.copilot\skills\mind-map"
+    "$env:USERPROFILE\.claude\skills\mind-map"
+    "$env:USERPROFILE\.agents\skills\mind-map"
+)
+
+foreach ($dir in $SkillDirs) {
+    try {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Invoke-RestMethod -Uri $SkillUrl -OutFile "$dir\SKILL.md"
+        Write-Ok "$dir\SKILL.md"
+    } catch {
+        Write-Warn "Could not install to $dir"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 

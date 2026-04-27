@@ -104,6 +104,22 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
 fi
 
+# Install SKILL.md for agent discovery
+SKILL_URL="https://raw.githubusercontent.com/${REPO}/main/SKILL.md"
+SKILL_DIRS=(
+  "${HOME}/.copilot/skills/mind-map"
+  "${HOME}/.claude/skills/mind-map"
+  "${HOME}/.agents/skills/mind-map"
+)
+
+echo ""
+echo "==> Installing SKILL.md for agent discovery..."
+for dir in "${SKILL_DIRS[@]}"; do
+  mkdir -p "$dir"
+  curl -fsSL -o "${dir}/SKILL.md" "$SKILL_URL" 2>/dev/null && \
+    echo "    ${dir}/SKILL.md" || true
+done
+
 # ---------------------------------------------------------------------------
 # Auto-configure MCP clients (skipped when called from install.ps1)
 # ---------------------------------------------------------------------------
