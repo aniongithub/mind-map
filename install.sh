@@ -73,17 +73,8 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL_
 mkdir -p "$INSTALL_DIR"
 
 # Stop existing service before replacing the binary
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  PLIST_PATH="${HOME}/Library/LaunchAgents/me.anionline.mind-map.plist"
-  if [[ -f "$PLIST_PATH" ]]; then
-    echo "==> Stopping existing mind-map service..."
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  fi
-elif command -v systemctl >/dev/null 2>&1; then
-  if systemctl --user is-active mind-map.service >/dev/null 2>&1; then
-    echo "==> Stopping existing mind-map service..."
-    systemctl --user stop mind-map.service 2>/dev/null || true
-  fi
+if "${INSTALL_DIR}/mind-map" service stop 2>/dev/null; then
+  echo "==> Stopped existing mind-map service"
 fi
 
 echo "==> Downloading ${TARBALL_NAME}..."
@@ -156,97 +147,17 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   read -r SERVICE_WIKI_DIR < /dev/tty || SERVICE_WIKI_DIR=""
   SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
 
-  mkdir -p "$SERVICE_WIKI_DIR"
   USE_SSE=true
 
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    # macOS: launchd plist
-    PLIST_PATH="${HOME}/Library/LaunchAgents/me.anionline.mind-map.plist"
-    mkdir -p "$(dirname "$PLIST_PATH")"
-    cat > "$PLIST_PATH" << PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>me.anionline.mind-map</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${INSTALL_DIR}/mind-map</string>
-        <string>serve</string>
-        <string>--addr</string>
-        <string>:${SERVICE_PORT}</string>
-        <string>--dir</string>
-        <string>${SERVICE_WIKI_DIR}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>${HOME}/.mind-map/mind-map.log</string>
-    <key>StandardErrorPath</key>
-    <string>${HOME}/.mind-map/mind-map.log</string>
-</dict>
-</plist>
-PLISTEOF
-    mkdir -p "${HOME}/.mind-map"
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    launchctl load "$PLIST_PATH"
-    echo "==> Installed and started launchd service"
-    echo "    Plist:  ${PLIST_PATH}"
-    echo "    Log:    ${HOME}/.mind-map/mind-map.log"
-    echo "    Stop:   launchctl unload ${PLIST_PATH}"
-    echo "    Start:  launchctl load ${PLIST_PATH}"
-
-  elif command -v systemctl >/dev/null 2>&1; then
-    # Linux: systemd user service
-    SERVICE_DIR="${HOME}/.config/systemd/user"
-    SERVICE_PATH="${SERVICE_DIR}/mind-map.service"
-    mkdir -p "$SERVICE_DIR"
-    cat > "$SERVICE_PATH" << SVCEOF
-[Unit]
-Description=mind-map wiki server
-After=network.target
-
-[Service]
-ExecStart=${INSTALL_DIR}/mind-map serve --addr :${SERVICE_PORT} --dir ${SERVICE_WIKI_DIR}
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-SVCEOF
-    systemctl --user daemon-reload
-    systemctl --user enable mind-map.service
-    systemctl --user start mind-map.service
-    echo "==> Installed and started systemd user service"
-    echo "    Unit:   ${SERVICE_PATH}"
-    echo "    Status: systemctl --user status mind-map"
-    echo "    Stop:   systemctl --user stop mind-map"
-    echo "    Log:    journalctl --user -u mind-map"
-
-    # Offer to enable linger for headless/server use
-    if ! loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
-      echo ""
-      printf "Enable service to run without an active login session (headless/server)? [y/N] "
-      read -r ENABLE_LINGER < /dev/tty || ENABLE_LINGER="n"
-      if [[ "$ENABLE_LINGER" =~ ^[Yy]$ ]]; then
-        sudo loginctl enable-linger "$USER" 2>/dev/null && \
-          echo "==> Enabled linger for $USER" || \
-          echo "Warning: Could not enable linger (needs sudo). Run: sudo loginctl enable-linger $USER"
-      fi
-    fi
-
-  else
-    echo "Warning: Could not detect systemd or launchd. Service not installed."
-    echo "You can run the server manually:"
-    echo "  mind-map serve --addr :${SERVICE_PORT} --dir ${SERVICE_WIKI_DIR}"
-  fi
+  # Use the built-in service manager (kardianos/service)
+  "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
+    "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
 
   echo ""
   echo "  Web UI:       http://localhost:${SERVICE_PORT}"
   echo "  MCP endpoint: http://localhost:${SERVICE_PORT}/mcp"
+  echo ""
+  echo "  Manage with:  mind-map service status|stop|start|uninstall"
 fi
 
 # ---------------------------------------------------------------------------
@@ -342,4 +253,10 @@ else
   echo "  Start the wiki server:  mind-map serve --dir ~/.mind-map/wiki"
   echo "  Start as MCP server:    mind-map serve --stdio --dir ~/.mind-map/wiki"
 fi
+echo ""
+echo "To uninstall mind-map completely:"
+echo "  mind-map service uninstall        # remove service (if installed)"
+echo "  rm ${INSTALL_DIR}/mind-map        # remove binary"
+echo "  rm -rf ~/.mind-map                # remove wiki data"
+echo "  rm -rf ~/.copilot/skills/mind-map ~/.claude/skills/mind-map ~/.agents/skills/mind-map"
 echo ""
