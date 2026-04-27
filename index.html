@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mind-map — Give your AI agent a memory it can actually use</title>
+  <meta name="description" content="A lightweight wiki that both AI agents and humans can read, write, and search. Pages are plain markdown. Portable, git-friendly and yours.">
+  <meta property="og:title" content="mind-map">
+  <meta property="og:description" content="Give your AI agent a memory it can actually use.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://aniongithub.github.io/mind-map/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <span class="logo-icon">◈</span>
+        <span>mind-map</span>
+      </a>
+      <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="nav-links">
+        <a href="#" onclick="window.scrollTo({top:0,behavior:'smooth'});return false;">Home</a>
+        <a href="#why">Why</a>
+        <a href="#how">How it works</a>
+        <a href="#tools">Tools</a>
+        <a href="#webui">Web UI</a>
+        <a href="https://github.com/aniongithub/mind-map" class="nav-github" target="_blank" rel="noopener">
+          GitHub ↗
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-badges">
+        <div class="hero-badge">Open Source MCP Server</div>
+        <a class="github-button" href="https://github.com/aniongithub/mind-map" data-size="large" data-icon="octicon-star" data-show-count="true" aria-label="Star aniongithub/mind-map on GitHub">Star</a>
+      </div>
+      <h1>Give your AI agent a memory<br><span class="gradient-text">it can actually use.</span></h1>
+      <p class="hero-sub">
+        A lightweight wiki that both AI agents and humans can read, write, and search.
+        Pages are plain markdown. Portable, git-friendly and yours.
+        Install in seconds and access it from anywhere.
+      </p>
+      <div class="hero-cta">
+        <div class="install-wrapper">
+          <div class="install-tabs">
+            <button class="install-tab active" data-platform="unix" onclick="switchInstallTab('unix', this)">Linux / macOS</button>
+            <button class="install-tab" data-platform="windows" onclick="switchInstallTab('windows', this)">Windows</button>
+          </div>
+          <div class="install-box" id="install-unix">
+            <code id="install-cmd-unix">curl -fsSL https://raw.githubusercontent.com/aniongithub/mind-map/main/install.sh | bash</code>
+            <button class="copy-btn" onclick="copyText('install-cmd-unix', this)" title="Copy to clipboard">
+              <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+          </div>
+          <div class="install-box" id="install-windows" style="display:none">
+            <code id="install-cmd-windows">irm https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | iex</code>
+            <button class="copy-btn" onclick="copyText('install-cmd-windows', this)" title="Copy to clipboard">
+              <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <p class="install-note" id="install-note-windows" style="visibility:hidden">Runs inside WSL — MCP clients on Windows launch via <code>wsl</code> bridge. Requires <a href="https://learn.microsoft.com/en-us/windows/wsl/install">WSL 2</a>.</p>
+      </div>
+      <div class="hero-works-with">
+        <span class="works-with-label">works with</span>
+        <div class="client-pills">
+          <span class="client-pill">
+            <img src="https://cdn.svglogos.dev/logos/github-copilot.svg" alt="">
+            GitHub Copilot
+          </span>
+          <span class="client-pill">
+            <img src="https://cdn.svglogos.dev/logos/claude.svg" alt="">
+            Claude
+          </span>
+          <span class="client-pill">
+            <img src="https://svgl.app/library/cursor_light.svg" alt="">
+            Cursor
+          </span>
+        </div>
+      </div>
+      <div class="hero-platforms">
+        linux-x64 · linux-arm64 · darwin-x64 · darwin-arm64 · windows (WSL)
+      </div>
+    </div>
+  </section>
+
+  <!-- Why -->
+  <section class="section" id="why">
+    <div class="section-inner">
+      <h2 class="section-title">Why?</h2>
+      <p class="section-sub">AI agents need persistent memory. Today's options are heavy desktop apps or throwaway context windows.</p>
+      <div class="two-col">
+        <div class="col problem">
+          <h2>The problem</h2>
+          <p>Existing agent memory tools require:</p>
+          <ul>
+            <li><span class="icon-bad">✗</span> Desktop apps with Node.js + Rust + WebKit</li>
+            <li><span class="icon-bad">✗</span> A display server — can't run headless</li>
+            <li><span class="icon-bad">✗</span> stdio transport — single agent only</li>
+            <li><span class="icon-bad">✗</span> No web access — knowledge locked on one machine</li>
+            <li><span class="icon-bad">✗</span> Pages of install instructions</li>
+          </ul>
+        </div>
+        <div class="col solution">
+          <h2>The solution</h2>
+          <p>Give agents a wiki. It runs <em>anywhere</em>:</p>
+          <ul>
+            <li><span class="icon-good">✓</span> Single binary, zero runtime deps</li>
+            <li><span class="icon-good">✓</span> Headless or with built-in web UI</li>
+            <li><span class="icon-good">✓</span> HTTP/SSE — multiple agents connect at once</li>
+            <li><span class="icon-good">✓</span> Browse and edit from any browser</li>
+            <li><span class="icon-good">✓</span> <code>curl | bash</code> and you're done</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section section-dark" id="how">
+    <div class="section-inner">
+      <h2 class="section-title">How it works</h2>
+      <p class="section-sub">One protocol. One server. Two kinds of clients.</p>
+      <div class="demo-container">
+        <!-- TODO: Replace with actual screengrab -->
+        <div class="demo-placeholder">
+          <div class="demo-placeholder-icon">🎬</div>
+          <p>Agent creating a wiki page and recalling it later</p>
+          <span class="demo-placeholder-note">screengrabs/agent-memory.gif</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="section">
+    <div class="section-inner">
+      <h2 class="section-title">One protocol, everywhere</h2>
+      <p class="section-sub">The web UI is an MCP client — same as the AI agents. No separate REST API to maintain.</p>
+      <div class="arch-diagram">
+        <div class="arch-row arch-clients">
+          <div class="arch-box arch-client">
+            <div class="arch-box-icon">🌐</div>
+            <strong>Web UI</strong>
+            <span>Preact app</span>
+          </div>
+          <div class="arch-box arch-client">
+            <div class="arch-box-icon">🤖</div>
+            <strong>AI Agent</strong>
+            <span>Copilot / Claude / Cursor</span>
+          </div>
+          <div class="arch-box arch-client">
+            <div class="arch-box-icon">🤖</div>
+            <strong>AI Agent</strong>
+            <span>Another agent</span>
+          </div>
+        </div>
+        <div class="arch-arrow">
+          <svg width="24" height="48" viewBox="0 0 24 48">
+            <polygon points="6,8 12,0 18,8" fill="#64748b"/>
+            <line x1="12" y1="6" x2="12" y2="42" stroke="#64748b" stroke-width="2"/>
+            <polygon points="6,40 12,48 18,40" fill="#64748b"/>
+          </svg>
+          <span class="arch-arrow-label">MCP over HTTP/SSE</span>
+        </div>
+        <div class="arch-row">
+          <div class="arch-box arch-server">
+            <div class="arch-box-icon">⚙️</div>
+            <strong>mind-map serve</strong>
+            <span>Go binary · Wiki engine · SQLite FTS5</span>
+          </div>
+        </div>
+        <div class="arch-arrow">
+          <svg width="24" height="48" viewBox="0 0 24 48">
+            <polygon points="6,8 12,0 18,8" fill="#64748b"/>
+            <line x1="12" y1="6" x2="12" y2="42" stroke="#64748b" stroke-width="2"/>
+            <polygon points="6,40 12,48 18,40" fill="#64748b"/>
+          </svg>
+          <span class="arch-arrow-label">read / write</span>
+        </div>
+        <div class="arch-row">
+          <div class="arch-box arch-storage">
+            <div class="arch-box-icon">📄</div>
+            <strong>Markdown files</strong>
+            <span>YAML frontmatter · [[wikilinks]] · git-friendly</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Web UI -->
+  <section class="section section-dark" id="webui">
+    <div class="section-inner">
+      <h2 class="section-title">Built-in web UI</h2>
+      <p class="section-sub">Browse, search, and edit your wiki from any browser. Metro-inspired, chromeless design.</p>
+      <div class="demo-container">
+        <!-- TODO: Replace with actual screengrab -->
+        <div class="demo-placeholder">
+          <div class="demo-placeholder-icon">🎬</div>
+          <p>Browsing the wiki, clicking wikilinks, viewing backlinks</p>
+          <span class="demo-placeholder-note">screengrabs/webui-browse.gif</span>
+        </div>
+      </div>
+      <div class="cards" style="margin-top: 2rem">
+        <div class="card">
+          <h3>Search</h3>
+          <p>Full-text search powered by SQLite FTS5. Ranked results with highlighted snippets.</p>
+        </div>
+        <div class="card">
+          <h3>Wikilinks</h3>
+          <p><code>[[page]]</code> syntax rendered as clickable links. Backlinks shown on every page.</p>
+        </div>
+        <div class="card">
+          <h3>Edit</h3>
+          <p>Click edit, change the markdown, save. The search index updates instantly.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Deploy anywhere -->
+  <section class="section">
+    <div class="section-inner">
+      <h2 class="section-title">Deploy anywhere</h2>
+      <p class="section-sub">It's a server, not an app. Run it wherever you need it.</p>
+      <div class="cards">
+        <div class="card">
+          <h3>🚀 Local machine</h3>
+          <p>Install with one command. The installer adds a desktop shortcut — click to launch your wiki and open the browser.</p>
+        </div>
+        <div class="card">
+          <h3>🐳 Container / Cloud</h3>
+          <p>Single static binary. Run in Docker, Kubernetes, a cloud VM, or as a sidecar. Agents connect over the network.</p>
+        </div>
+        <div class="card">
+          <h3>📂 Per-repository memory</h3>
+          <p>Drop a wiki alongside your code. Agents build up project knowledge that persists across sessions and team members.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tools -->
+  <section class="section section-dark" id="tools">
+    <div class="section-inner">
+      <h2 class="section-title">8 MCP tools</h2>
+      <p class="section-sub">Everything an agent needs to use the wiki as persistent memory.</p>
+      <div class="tools-list">
+        <div class="tool-group-wide">
+          <ul>
+            <li><strong>search_pages</strong> <span>Full-text search across titles and content</span></li>
+            <li><strong>get_wiki_context</strong> <span>Wiki overview — page count, directories, recent pages</span></li>
+            <li><strong>get_page</strong> <span>Read a page with frontmatter, body, links, and backlinks</span></li>
+            <li><strong>create_page</strong> <span>Create a new page with markdown + optional YAML frontmatter</span></li>
+            <li><strong>update_page</strong> <span>Update an existing page's content</span></li>
+            <li><strong>delete_page</strong> <span>Remove a page from the wiki and search index</span></li>
+            <li><strong>list_pages</strong> <span>List pages, optionally filtered by path prefix</span></li>
+            <li><strong>get_backlinks</strong> <span>Get all pages that link to a given page</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Editing demo -->
+  <section class="section">
+    <div class="section-inner">
+      <h2 class="section-title">Edit from the browser</h2>
+      <p class="section-sub">Click edit, write markdown, save. Agents see the changes immediately.</p>
+      <div class="demo-container">
+        <!-- TODO: Replace with actual screengrab -->
+        <div class="demo-placeholder">
+          <div class="demo-placeholder-icon">🎬</div>
+          <p>Editing a page in the web UI, then an agent reading the updated content</p>
+          <span class="demo-placeholder-note">screengrabs/webui-edit.gif</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-left">
+        <span class="logo-icon">◈</span> mind-map
+        <span class="footer-sep">·</span>
+        MIT License
+      </div>
+      <div class="footer-right">
+        <a href="https://github.com/aniongithub/mind-map">GitHub</a>
+        <a href="https://github.com/aniongithub/mind-map/issues">Issues</a>
+        <a href="https://github.com/aniongithub/mind-map/releases">Releases</a>
+        <a href="https://www.anionline.me/devcontainer-mcp/">devcontainer-mcp</a>
+      </div>
+    </div>
+  </footer>
+
+  <script async defer src="https://buttons.github.io/buttons.js"></script>
+  <script>
+    function copyText(elemId, btn) {
+      const text = document.getElementById(elemId).textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.querySelector('.copy-icon').style.display = 'none';
+        btn.querySelector('.check-icon').style.display = 'block';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.querySelector('.copy-icon').style.display = 'block';
+          btn.querySelector('.check-icon').style.display = 'none';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function switchInstallTab(platform, btn) {
+      document.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      const isWindows = platform === 'windows';
+      document.getElementById('install-unix').style.display = isWindows ? 'none' : 'flex';
+      document.getElementById('install-windows').style.display = isWindows ? 'flex' : 'none';
+      document.getElementById('install-note-windows').style.visibility = isWindows ? 'visible' : 'hidden';
+    }
+
+    (function() {
+      const isWindows = navigator.platform.indexOf('Win') > -1 ||
+        navigator.userAgent.indexOf('Windows') > -1;
+      if (isWindows) {
+        const winTab = document.querySelector('.install-tab[data-platform="windows"]');
+        if (winTab) switchInstallTab('windows', winTab);
+      }
+    })();
+  </script>
+</body>
+</html>
