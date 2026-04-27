@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Windows installer for mind-map (via WSL).
+    Windows installer for mind-map.
 .DESCRIPTION
-    Installs the mind-map Linux binary inside WSL and configures
-    Windows-side MCP clients to use the WSL bridge ("command": "wsl").
+    Downloads the native Windows binary, configures MCP clients,
+    and optionally installs mind-map as a persistent service.
 .EXAMPLE
     irm https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | iex
 #>
@@ -13,7 +13,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $Repo = "aniongithub/mind-map"
-$WslBinaryPath = "~/.local/bin/mind-map"
+$InstallDir = "$env:LOCALAPPDATA\mind-map"
+$BinaryPath = "$InstallDir\mind-map.exe"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22,93 +23,88 @@ $WslBinaryPath = "~/.local/bin/mind-map"
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$Message) Write-Host "  $([char]0x2713) $Message" -ForegroundColor Green }
 function Write-Warn { param([string]$Message) Write-Host "  $([char]0x26A0) $Message" -ForegroundColor Yellow }
-function Write-Fail { param([string]$Message) Write-Host "  $([char]0x2717) $Message" -ForegroundColor Red }
 
 # ---------------------------------------------------------------------------
-# 1. Verify WSL is available
+# 1. Detect architecture
 # ---------------------------------------------------------------------------
 
-Write-Step "Checking for WSL..."
+Write-Step "Detecting platform..."
 
-try {
-    $wslStatus = wsl --status 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "WSL returned non-zero exit code" }
-    Write-Ok "WSL is available"
-} catch {
-    Write-Host ""
-    Write-Host "Error: WSL (Windows Subsystem for Linux) is required but not found." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Install WSL with:  wsl --install" -ForegroundColor Yellow
-    Write-Host "Then restart your computer and run this script again."
-    Write-Host "More info: https://learn.microsoft.com/en-us/windows/wsl/install"
-    exit 1
-}
-
-# Find usable WSL distros (skip docker-desktop* distros which are minimal)
-$WslDistro = $null
-$distroLines = (wsl -l -q 2>&1) -replace "`0", "" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-$usableDistros = @($distroLines | Where-Object { $_ -notmatch '^docker-desktop' })
-
-if ($usableDistros.Count -eq 0) {
-    Write-Host ""
-    Write-Host "Error: No usable WSL distro found (docker-desktop is not supported)." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Install a Linux distro with:  wsl --install Ubuntu" -ForegroundColor Yellow
-    exit 1
-} elseif ($usableDistros.Count -eq 1) {
-    $WslDistro = $usableDistros[0]
+$arch = if ([Environment]::Is64BitOperatingSystem) {
+    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 } else {
-    Write-Host ""
-    Write-Host "Available WSL distros:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $usableDistros.Count; $i++) {
-        Write-Host "  [$($i + 1)] $($usableDistros[$i])"
-    }
-    Write-Host ""
-    $choice = Read-Host "Select a distro (1-$($usableDistros.Count))"
-    $idx = [int]$choice - 1
-    if ($idx -lt 0 -or $idx -ge $usableDistros.Count) {
-        Write-Host "Invalid selection." -ForegroundColor Red
-        exit 1
-    }
-    $WslDistro = $usableDistros[$idx]
+    Write-Host "Error: 32-bit Windows is not supported." -ForegroundColor Red
+    exit 1
 }
 
-Write-Ok "Using WSL distro: $WslDistro"
+Write-Ok "windows-$arch"
 
 # ---------------------------------------------------------------------------
-# 2. Install binary inside WSL (reuse install.sh)
+# 2. Get latest version
 # ---------------------------------------------------------------------------
 
-Write-Step "Installing mind-map binary inside WSL..."
+Write-Step "Checking latest version..."
 
-# Stop existing scheduled task before replacing the binary
+$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+$version = $release.tag_name
+Write-Ok "Latest version: $version"
+
+# ---------------------------------------------------------------------------
+# 3. Stop existing service before replacing binary
+# ---------------------------------------------------------------------------
+
 $existingTask = Get-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
 if ($existingTask) {
-    Write-Host "    Stopping existing mind-map service..." -ForegroundColor DarkGray
+    Write-Step "Stopping existing mind-map service..."
     Stop-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
+    Write-Ok "Stopped"
 }
 
-$installUrl = "https://github.com/$Repo/releases/latest/download/install.sh"
-$wslResult = wsl -d $WslDistro bash -c "curl -fsSL '$installUrl' | bash -s -- --skip-mcp-config" 2>&1
-$wslResult | ForEach-Object { Write-Host "    $_" }
+# ---------------------------------------------------------------------------
+# 4. Download and install binary
+# ---------------------------------------------------------------------------
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "Error: Binary installation inside WSL failed." -ForegroundColor Red
-    Write-Host "Try running manually in WSL: curl -fsSL $installUrl | bash"
-    exit 1
+Write-Step "Downloading mind-map-windows-$arch.exe..."
+
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+$artifact = "mind-map-windows-$arch.exe"
+$tarball = "$artifact.tar.gz"
+$downloadUrl = "https://github.com/$Repo/releases/download/$version/$tarball"
+$tarballPath = "$env:TEMP\$tarball"
+
+Invoke-WebRequest -Uri $downloadUrl -OutFile $tarballPath -UseBasicParsing
+
+# Extract using tar (available on Windows 10+)
+tar -xzf $tarballPath -C $InstallDir 2>&1 | Out-Null
+
+# Rename platform-specific binary
+if (Test-Path "$InstallDir\$artifact") {
+    Move-Item -Path "$InstallDir\$artifact" -Destination $BinaryPath -Force
 }
 
-# Verify the binary works
-$versionCheck = wsl -d $WslDistro bash -lc "$WslBinaryPath --help" 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Ok "Installed: mind-map"
-} else {
+Remove-Item $tarballPath -Force -ErrorAction SilentlyContinue
+
+Write-Ok "Installed to $BinaryPath"
+
+# Verify
+try {
+    & $BinaryPath --help | Out-Null
+    Write-Ok "mind-map is working"
+} catch {
     Write-Warn "Binary installed but could not verify"
 }
 
+# Add to user PATH if not already there
+$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+if ($userPath -notlike "*$InstallDir*") {
+    [Environment]::SetEnvironmentVariable("PATH", "$InstallDir;$userPath", "User")
+    $env:PATH = "$InstallDir;$env:PATH"
+    Write-Ok "Added $InstallDir to user PATH"
+}
+
 # ---------------------------------------------------------------------------
-# 3. Install SKILL.md for agent discovery
+# 5. Install SKILL.md for agent discovery
 # ---------------------------------------------------------------------------
 
 Write-Step "Installing SKILL.md for agent discovery..."
@@ -131,11 +127,11 @@ foreach ($dir in $SkillDirs) {
 }
 
 # ---------------------------------------------------------------------------
-# 5. Interactive: set up as a persistent service
+# 6. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
 $DefaultPort = "51849"
-$DefaultWikiDir = "~/.mind-map/wiki"
+$DefaultWikiDir = "$env:USERPROFILE\.mind-map\wiki"
 $UseSSE = $false
 $servicePort = $DefaultPort
 
@@ -149,16 +145,16 @@ if ($installService -match '^[Yy]$') {
     $serviceWikiDir = Read-Host "Wiki directory [$DefaultWikiDir]"
     if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
 
-    # Create wiki directory inside WSL
-    wsl -d $WslDistro bash -c "mkdir -p $($serviceWikiDir -replace '~','`$HOME')" 2>&1 | Out-Null
+    # Create wiki directory
+    New-Item -ItemType Directory -Path $serviceWikiDir -Force | Out-Null
 
     $UseSSE = $true
 
-    # Create a Scheduled Task that launches the server via WSL at logon
+    # Create a Scheduled Task that runs mind-map natively at logon
     $taskName = "mind-map"
     $taskAction = New-ScheduledTaskAction `
-        -Execute "wsl.exe" `
-        -Argument "-d $WslDistro $WslBinaryPath serve --addr :$servicePort --dir $serviceWikiDir"
+        -Execute $BinaryPath `
+        -Argument "serve --addr :$servicePort --dir `"$serviceWikiDir`""
 
     $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $taskSettings = New-ScheduledTaskSettingsSet `
@@ -176,7 +172,7 @@ if ($installService -match '^[Yy]$') {
         -Action $taskAction `
         -Trigger $taskTrigger `
         -Settings $taskSettings `
-        -Description "mind-map wiki server (via WSL)" | Out-Null
+        -Description "mind-map wiki server" | Out-Null
 
     # Start it now
     Start-ScheduledTask -TaskName $taskName
@@ -192,7 +188,7 @@ if ($installService -match '^[Yy]$') {
 }
 
 # ---------------------------------------------------------------------------
-# 6. Configure Windows-side MCP clients
+# 7. Configure MCP clients
 # ---------------------------------------------------------------------------
 
 Write-Step "Configuring MCP clients..."
@@ -204,8 +200,8 @@ if ($UseSSE) {
     }
 } else {
     $mcpServerEntry = @{
-        command = "wsl"
-        args    = @($WslBinaryPath, "serve", "--stdio")
+        command = $BinaryPath
+        args    = @("serve", "--stdio")
     }
 }
 
@@ -222,7 +218,6 @@ function Set-McpConfig {
                 $content | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{})
             }
             if ($content.mcpServers.PSObject.Properties.Name -contains "mind-map") {
-                # Update existing entry
                 $content.mcpServers.PSObject.Properties.Remove("mind-map")
             }
             $content.mcpServers | Add-Member -NotePropertyName "mind-map" -NotePropertyValue ([PSCustomObject]$mcpServerEntry)
@@ -273,6 +268,6 @@ if ($UseSSE) {
 } else {
     Write-Host "Done! mind-map is ready to use." -ForegroundColor Green
     Write-Host ""
-    Write-Host "Start the wiki server (from WSL):" -ForegroundColor DarkGray
-    Write-Host "  mind-map serve --dir ~/.mind-map/wiki" -ForegroundColor DarkGray
+    Write-Host "  Start the wiki server:  mind-map serve --dir $DefaultWikiDir" -ForegroundColor DarkGray
+    Write-Host "  Start as MCP server:    mind-map serve --stdio" -ForegroundColor DarkGray
 }

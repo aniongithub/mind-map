@@ -40,15 +40,13 @@ Agent: "What do we know about authentication?"
 curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/install.sh | bash
 ```
 
-### Windows (via WSL)
+### Windows
 
 ```powershell
 Invoke-RestMethod https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | Invoke-Expression
 ```
 
-> **How it works:** The binary runs inside WSL; MCP clients on Windows launch it via `wsl ~/.local/bin/mind-map serve --stdio`. WSL 2 is required — install it with `wsl --install` if you haven't already.
-
-Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, and **darwin-arm64**.
+Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64**, **windows-x64**, and **windows-arm64**.
 
 ## Architecture
 
@@ -125,14 +123,14 @@ The web UI speaks MCP — it's an MCP client, not a separate interface. If an ag
 }
 ```
 
-### Windows (WSL bridge)
+### Windows
 
 ```json
 {
   "mcpServers": {
     "mind-map": {
-      "command": "wsl",
-      "args": ["~/.local/bin/mind-map", "serve", "--stdio", "--dir", "~/.mind-map/wiki"]
+      "command": "mind-map",
+      "args": ["serve", "--stdio"]
     }
   }
 }
