@@ -148,15 +148,25 @@ if ($installService -match '^[Yy]$') {
 
     $UseSSE = $true
 
-    # Use the built-in service manager (kardianos/service)
-    & $BinaryPath service install --addr ":$servicePort" --dir "$serviceWikiDir"
-    & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
+    # Windows Services (SCM) require admin privileges
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+        & $BinaryPath service install --addr ":$servicePort" --dir "$serviceWikiDir"
+        & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
+        Write-Ok "Service installed and started"
+    } else {
+        Write-Warn "Service installation requires an Administrator terminal."
+        Write-Host ""
+        Write-Host "  Run these commands in an elevated PowerShell:" -ForegroundColor Yellow
+        Write-Host "    mind-map service install --addr :$servicePort --dir '$serviceWikiDir'" -ForegroundColor White
+        Write-Host "    mind-map service start --addr :$servicePort --dir '$serviceWikiDir'" -ForegroundColor White
+    }
 
     Write-Host ""
     Write-Host "  Web UI:       http://localhost:$servicePort" -ForegroundColor Cyan
     Write-Host "  MCP endpoint: http://localhost:$servicePort/mcp" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
+    Write-Host "  Manage with (admin):  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
