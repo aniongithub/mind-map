@@ -5,6 +5,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
+	"time"
 
 	"github.com/aniongithub/mind-map/internal/wiki"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -104,33 +106,45 @@ type listInput struct {
 // --- Tool handlers ---
 
 func (s *Server) searchPages(_ context.Context, _ *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	results, err := s.wiki.Search(input.Query, input.Limit)
 	if err != nil {
+		slog.Error("tool.search_pages failed", slog.String("query", input.Query), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.search_pages", slog.String("query", input.Query), slog.Int("results", len(results)), slog.Duration("elapsed", time.Since(start)))
 	return textResult(results)
 }
 
 func (s *Server) getWikiContext(_ context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	ctx, err := s.wiki.Context()
 	if err != nil {
+		slog.Error("tool.get_wiki_context failed", slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.get_wiki_context", slog.Int("page_count", ctx.PageCount), slog.Duration("elapsed", time.Since(start)))
 	return textResult(ctx)
 }
 
 func (s *Server) getPage(_ context.Context, _ *mcp.CallToolRequest, input pagePathInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	page, err := s.wiki.GetPage(input.Path)
 	if err != nil {
+		slog.Warn("tool.get_page failed", slog.String("page", input.Path), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.get_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
 	return textResult(page)
 }
 
 func (s *Server) createPage(_ context.Context, _ *mcp.CallToolRequest, input createInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	if err := s.wiki.CreatePage(input.Path, input.Content); err != nil {
+		slog.Error("tool.create_page failed", slog.String("page", input.Path), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.create_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: "Created page: " + input.Path},
@@ -139,9 +153,12 @@ func (s *Server) createPage(_ context.Context, _ *mcp.CallToolRequest, input cre
 }
 
 func (s *Server) updatePage(_ context.Context, _ *mcp.CallToolRequest, input updateInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	if err := s.wiki.UpdatePage(input.Path, input.Content); err != nil {
+		slog.Error("tool.update_page failed", slog.String("page", input.Path), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.update_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: "Updated page: " + input.Path},
@@ -150,9 +167,12 @@ func (s *Server) updatePage(_ context.Context, _ *mcp.CallToolRequest, input upd
 }
 
 func (s *Server) deletePage(_ context.Context, _ *mcp.CallToolRequest, input pagePathInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	if err := s.wiki.DeletePage(input.Path); err != nil {
+		slog.Error("tool.delete_page failed", slog.String("page", input.Path), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.delete_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: "Deleted page: " + input.Path},
@@ -161,18 +181,24 @@ func (s *Server) deletePage(_ context.Context, _ *mcp.CallToolRequest, input pag
 }
 
 func (s *Server) listPages(_ context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	pages, err := s.wiki.ListPages(input.Prefix)
 	if err != nil {
+		slog.Error("tool.list_pages failed", slog.String("prefix", input.Prefix), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.list_pages", slog.String("prefix", input.Prefix), slog.Int("results", len(pages)), slog.Duration("elapsed", time.Since(start)))
 	return textResult(pages)
 }
 
 func (s *Server) getBacklinks(_ context.Context, _ *mcp.CallToolRequest, input pagePathInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
 	backlinks, err := s.wiki.GetBacklinks(input.Path)
 	if err != nil {
+		slog.Error("tool.get_backlinks failed", slog.String("page", input.Path), slog.Any("error", err))
 		return nil, nil, err
 	}
+	slog.Info("tool.get_backlinks", slog.String("page", input.Path), slog.Int("results", len(backlinks)), slog.Duration("elapsed", time.Since(start)))
 	return textResult(backlinks)
 }
 

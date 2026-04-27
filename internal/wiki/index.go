@@ -3,6 +3,7 @@ package wiki
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,9 @@ import (
 func (w *Wiki) Reindex() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	start := time.Now()
+	pageCount := 0
 
 	tx, err := w.db.Begin()
 	if err != nil {
@@ -70,6 +74,7 @@ func (w *Wiki) Reindex() error {
 		}
 
 		metaJSON, _ := json.Marshal(parsed.frontmatter)
+		pageCount++
 
 		_, err = tx.Exec(
 			"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
@@ -95,7 +100,12 @@ func (w *Wiki) Reindex() error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	slog.Info("reindex complete", slog.Int("pages", pageCount), slog.Duration("elapsed", time.Since(start)))
+	return nil
 }
 
 // indexPage indexes a single page (after write/update).
