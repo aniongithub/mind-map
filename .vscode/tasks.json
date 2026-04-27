@@ -29,7 +29,7 @@
         {
             "label": "build-go",
             "type": "shell",
-            "command": "CGO_ENABLED=1 go build -tags sqlite_fts5 -o ${workspaceFolder}/mind-map ./cmd/mind-map/",
+            "command": "go build -o ${workspaceFolder}/mind-map ./cmd/mind-map/",
             "group": "build",
             "problemMatcher": ["$go"],
             "detail": "Build Go binary"
@@ -37,7 +37,7 @@
         {
             "label": "test",
             "type": "shell",
-            "command": "CGO_ENABLED=1 go test -v -tags sqlite_fts5 ./...",
+            "command": "go test -v ./...",
             "group": {
                 "kind": "test",
                 "isDefault": true

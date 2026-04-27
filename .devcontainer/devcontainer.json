@@ -28,12 +28,10 @@
         "dbaeumer.vscode-eslint"
       ],
       "settings": {
-        "go.buildTags": "sqlite_fts5",
-        "go.testTags": "sqlite_fts5",
-        "go.buildFlags": ["-tags=sqlite_fts5"],
-        "go.testEnvVars": {
-          "CGO_ENABLED": "1"
-        }
+        "go.buildTags": "",
+        "go.testTags": "",
+        "go.buildFlags": [],
+        "go.testEnvVars": {}
       }
     }
   },

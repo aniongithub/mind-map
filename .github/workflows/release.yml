@@ -9,82 +9,48 @@ permissions:
 
 jobs:
   build:
-    name: Build release binaries
+    name: Build ${{ matrix.artifact }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: mind-map-linux-x64
+          - goos: linux
+            goarch: arm64
+            artifact: mind-map-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            artifact: mind-map-darwin-x64
+          - goos: darwin
+            goarch: arm64
+            artifact: mind-map-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: mind-map-windows-x64.exe
+          - goos: windows
+            goarch: arm64
+            artifact: mind-map-windows-arm64.exe
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build all targets in devcontainer
+      - name: Build in devcontainer
         uses: devcontainers/ci@v0.3
         with:
           push: never
           runCmd: |
             set -e
 
-            # Build webui first
+            # Build webui
             cd webui && npm install && npm run build && cd ..
 
-            # Install cross-compilation toolchain for linux-arm64
-            sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+            # Cross-compile (pure Go, no CGO needed)
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+              go build -o ${{ matrix.artifact }} ./cmd/mind-map/
 
-            # Build linux-x64 (native)
-            CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-              go build -tags sqlite_fts5 -o mind-map-linux-x64 ./cmd/mind-map/
-
-            # Build linux-arm64 (cross-compile)
-            CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
-              go build -tags sqlite_fts5 -o mind-map-linux-arm64 ./cmd/mind-map/
-
-            # Package as tarballs
-            tar czf mind-map-linux-x64.tar.gz mind-map-linux-x64
-            tar czf mind-map-linux-arm64.tar.gz mind-map-linux-arm64
-
-      - name: Upload linux-x64
-        uses: softprops/action-gh-release@v3
-        with:
-          files: mind-map-linux-x64.tar.gz
-
-      - name: Upload linux-arm64
-        uses: softprops/action-gh-release@v3
-        with:
-          files: mind-map-linux-arm64.tar.gz
-
-  build-macos:
-    name: Build ${{ matrix.artifact }}
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        include:
-          - target_os: darwin
-            target_arch: amd64
-            artifact: mind-map-darwin-x64
-          - target_os: darwin
-            target_arch: arm64
-            artifact: mind-map-darwin-arm64
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-
-      - name: Build webui
-        run: cd webui && npm install && npm run build
-
-      - name: Build
-        env:
-          CGO_ENABLED: '1'
-          GOOS: ${{ matrix.target_os }}
-          GOARCH: ${{ matrix.target_arch }}
-        run: go build -tags sqlite_fts5 -o ${{ matrix.artifact }} ./cmd/mind-map/
-
-      - name: Codesign (ad-hoc)
-        run: codesign -s - ${{ matrix.artifact }} 2>/dev/null || true
-
-      - name: Package binary
-        run: tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+            # Package as tarball
+            tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
