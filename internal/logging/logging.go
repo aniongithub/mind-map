@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"time"
 
@@ -17,17 +18,84 @@ import (
 
 // Init sets up the default slog logger. Call once at startup.
 // If svcLogger is non-nil (service mode), logs route to the system log.
+// If logFile is non-empty, logs also write to that file.
 // Otherwise, logs go to stderr as text.
-func Init(svcLogger service.Logger) {
+func Init(svcLogger service.Logger, logFile string) *os.File {
 	var handler slog.Handler
+	var file *os.File
+
 	if svcLogger != nil {
 		handler = &serviceHandler{svc: svcLogger}
+		// In service mode, also write to file if specified
+		if logFile != "" {
+			if f, err := openLogFile(logFile); err == nil {
+				file = f
+				fileHandler := slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
+				handler = &multiHandler{handlers: []slog.Handler{handler, fileHandler}}
+			}
+		}
+	} else if logFile != "" {
+		// Interactive mode with file: write to both stderr and file
+		if f, err := openLogFile(logFile); err == nil {
+			file = f
+			stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+			fileHandler := slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
+			handler = &multiHandler{handlers: []slog.Handler{stderrHandler, fileHandler}}
+		} else {
+			handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+		}
 	} else {
-		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
 	}
+
 	slog.SetDefault(slog.New(handler))
+	return file
+}
+
+func openLogFile(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+}
+
+// multiHandler fans out log records to multiple handlers.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if err := h.Handle(ctx, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: handlers}
+}
+
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithGroup(name)
+	}
+	return &multiHandler{handlers: handlers}
 }
 
 // serviceHandler adapts kardianos/service.Logger to slog.Handler.

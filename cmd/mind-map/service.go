@@ -22,13 +22,16 @@ type mindMapService struct {
 }
 
 func (m *mindMapService) Start(s service.Service) error {
-	// Initialize logging with the system logger (journald/Event Log/syslog)
+	// Default log file: ~/.mind-map/mind-map.log
+	logFile := filepath.Join(filepath.Dir(m.dir), "mind-map.log")
+
+	// Initialize logging with the system logger (journald/Event Log/syslog) + file
 	svcLogger, err := s.SystemLogger(nil)
 	if err != nil {
-		logging.Init(nil) // fall back to stderr
-		slog.Warn("could not open system logger, using stderr", slog.Any("error", err))
+		logging.Init(nil, logFile)
+		slog.Warn("could not open system logger, using file", slog.Any("error", err))
 	} else {
-		logging.Init(svcLogger)
+		logging.Init(svcLogger, logFile)
 	}
 
 	slog.Info("mind-map service starting",

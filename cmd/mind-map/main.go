@@ -34,6 +34,7 @@ func init() {
 	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
 	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
+	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	rootCmd.AddCommand(serveCmd)
 }
@@ -41,9 +42,12 @@ func init() {
 func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 	useStdio, _ := cmd.Flags().GetBool("stdio")
+	logFile, _ := cmd.Flags().GetString("log-file")
 
-	// Initialize logging for interactive mode (stderr text)
-	logging.Init(nil)
+	// Initialize logging for interactive mode (stderr + optional file)
+	if f := logging.Init(nil, logFile); f != nil {
+		defer f.Close()
+	}
 
 	if useStdio {
 		w, err := wiki.Open(dir)
