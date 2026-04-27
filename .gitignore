@@ -6,8 +6,9 @@
 .mind-map.db-shm
 .mind-map.db-wal
 
-# WebUI build output
-webui/dist/
+# WebUI build output (keep .gitkeep for go:embed)
+webui/dist/*
+!webui/dist/.gitkeep
 webui/node_modules/
 
 # VS Code cache

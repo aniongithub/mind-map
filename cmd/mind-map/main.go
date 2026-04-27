@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
 
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
+	"github.com/aniongithub/mind-map/webui"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
@@ -29,7 +31,7 @@ var serveCmd = &cobra.Command{
 func init() {
 	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
 	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
-	serveCmd.Flags().String("webui", "webui/dist", "Path to the webui dist directory")
+	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	rootCmd.AddCommand(serveCmd)
 }
@@ -64,10 +66,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sseHandler)
 
-	// Serve the webui
+	// Serve the webui: --webui flag overrides embedded, then embedded, then fallback
 	webDir, _ := cmd.Flags().GetString("webui")
-	if _, err := os.Stat(webDir); err == nil {
-		mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	var webFS fs.FS
+	if webDir != "" {
+		if _, err := os.Stat(webDir); err == nil {
+			webFS = os.DirFS(webDir)
+		}
+	}
+	if webFS == nil {
+		webFS = webui.DistFS()
+	}
+	if webFS != nil {
+		mux.Handle("/", http.FileServerFS(webFS))
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
