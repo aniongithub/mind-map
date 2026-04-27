@@ -162,7 +162,9 @@ The wiki engine extracts:
 
 ## Development
 
-Development happens inside a devcontainer.
+Development happens inside a [dev container](https://containers.dev/) — a reproducible, containerized environment defined by `.devcontainer/devcontainer.json`. This means no local Go or Node install required; everything runs in the container.
+
+You can manage the devcontainer with the [devcontainer CLI](https://github.com/devcontainers/cli), [DevPod](https://devpod.sh/), or [GitHub Codespaces](https://github.com/features/codespaces). If you use AI coding agents, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp) lets the agent spin up and work inside the container directly.
 
 ```bash
 # Spin up the devcontainer
