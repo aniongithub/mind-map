@@ -40,17 +40,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 	useStdio, _ := cmd.Flags().GetBool("stdio")
 
-	// Open the wiki
-	w, err := wiki.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open wiki: %w", err)
-	}
-	defer w.Close()
-
-	// Create MCP server
-	s := mindmcp.NewServer(w)
-
 	if useStdio {
+		// stdio mode — run inline, not as a service
+		w, err := wiki.Open(dir)
+		if err != nil {
+			return fmt.Errorf("open wiki: %w", err)
+		}
+		defer w.Close()
+
+		s := mindmcp.NewServer(w)
 		fmt.Fprintln(os.Stderr, "mind-map MCP server (stdio mode)")
 		fmt.Fprintf(os.Stderr, "Wiki: %s\n", w.Root())
 		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
@@ -58,6 +56,31 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// HTTP/SSE mode
 	addr, _ := cmd.Flags().GetString("addr")
+	webuiDir, _ := cmd.Flags().GetString("webui")
+
+	stopCh := make(chan struct{})
+
+	// Handle interrupt for interactive use
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		close(stopCh)
+	}()
+
+	return runHTTPServer(addr, dir, webuiDir, stopCh)
+}
+
+// runHTTPServer starts the HTTP/SSE server and blocks until stopCh is closed.
+// Shared by both the interactive `serve` command and the system service.
+func runHTTPServer(addr, dir, webuiDir string, stopCh chan struct{}) error {
+	w, err := wiki.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open wiki: %w", err)
+	}
+	defer w.Close()
+
+	s := mindmcp.NewServer(w)
 
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		return s.MCPServer()
@@ -67,11 +90,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	mux.Handle("/mcp", sseHandler)
 
 	// Serve the webui: --webui flag overrides embedded, then embedded, then fallback
-	webDir, _ := cmd.Flags().GetString("webui")
 	var webFS fs.FS
-	if webDir != "" {
-		if _, err := os.Stat(webDir); err == nil {
-			webFS = os.DirFS(webDir)
+	if webuiDir != "" {
+		if _, err := os.Stat(webuiDir); err == nil {
+			webFS = os.DirFS(webuiDir)
 		}
 	}
 	if webFS == nil {
@@ -80,16 +102,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if webFS != nil {
 		mux.Handle("/", http.FileServerFS(webFS))
 	} else {
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
+		mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(rw, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
 				<h1>mind-map</h1><p>WebUI not built. Run <code>npm run build</code> in <code>webui/</code></p>
 			</body></html>`)
 		})
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 
 	server := &http.Server{Addr: addr, Handler: mux}
 
@@ -97,7 +116,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "MCP SSE endpoint: http://localhost%s/mcp\n", addr)
 
 	go func() {
-		<-ctx.Done()
+		<-stopCh
 		server.Close()
 	}()
 

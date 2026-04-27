@@ -53,11 +53,10 @@ Write-Ok "Latest version: $version"
 # 3. Stop existing service before replacing binary
 # ---------------------------------------------------------------------------
 
-$existingTask = Get-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
-if ($existingTask) {
-    Write-Step "Stopping existing mind-map service..."
-    Stop-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
-    Write-Ok "Stopped"
+# Stop existing service before replacing binary (ignore errors if not installed)
+& $BinaryPath service stop 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "Stopped existing mind-map service"
 }
 
 # ---------------------------------------------------------------------------
@@ -145,46 +144,17 @@ if ($installService -match '^[Yy]$') {
     $serviceWikiDir = Read-Host "Wiki directory [$DefaultWikiDir]"
     if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
 
-    # Create wiki directory
-    New-Item -ItemType Directory -Path $serviceWikiDir -Force | Out-Null
-
     $UseSSE = $true
 
-    # Create a Scheduled Task that runs mind-map natively at logon
-    $taskName = "mind-map"
-    $taskAction = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-WindowStyle Hidden -Command & '$BinaryPath' serve --addr :$servicePort --dir '$serviceWikiDir'"
+    # Use the built-in service manager (kardianos/service)
+    & $BinaryPath service install --addr ":$servicePort" --dir "$serviceWikiDir"
+    & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
 
-    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $taskSettings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 3 `
-        -RestartInterval ([TimeSpan]::FromMinutes(1))
-
-    # Remove existing task if present
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-
-    Register-ScheduledTask `
-        -TaskName $taskName `
-        -Action $taskAction `
-        -Trigger $taskTrigger `
-        -Settings $taskSettings `
-        -Description "mind-map wiki server" | Out-Null
-
-    # Start it now
-    Start-ScheduledTask -TaskName $taskName
-
-    Write-Host ""
-    Write-Ok "Installed and started scheduled task '$taskName'"
-    Write-Host "    Status: Get-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
-    Write-Host "    Stop:   Stop-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
-    Write-Host "    Remove: Unregister-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Web UI:       http://localhost:$servicePort" -ForegroundColor Cyan
     Write-Host "  MCP endpoint: http://localhost:$servicePort/mcp" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
@@ -271,3 +241,9 @@ if ($UseSSE) {
     Write-Host "  Start the wiki server:  mind-map serve --dir $DefaultWikiDir" -ForegroundColor DarkGray
     Write-Host "  Start as MCP server:    mind-map serve --stdio" -ForegroundColor DarkGray
 }
+Write-Host ""
+Write-Host "To uninstall mind-map completely:" -ForegroundColor DarkGray
+Write-Host "  mind-map service uninstall                        # remove service (if installed)" -ForegroundColor DarkGray
+Write-Host "  Remove-Item -Recurse '$InstallDir'                # remove binary" -ForegroundColor DarkGray
+Write-Host "  Remove-Item -Recurse '$env:USERPROFILE\.mind-map' # remove wiki data" -ForegroundColor DarkGray
+Write-Host "  Remove-Item -Recurse '$env:USERPROFILE\.copilot\skills\mind-map', '$env:USERPROFILE\.claude\skills\mind-map', '$env:USERPROFILE\.agents\skills\mind-map'" -ForegroundColor DarkGray
