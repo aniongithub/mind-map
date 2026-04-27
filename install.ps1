@@ -54,9 +54,11 @@ Write-Ok "Latest version: $version"
 # ---------------------------------------------------------------------------
 
 # Stop existing service before replacing binary (ignore errors if not installed)
-& $BinaryPath service stop 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Ok "Stopped existing mind-map service"
+if (Test-Path $BinaryPath) {
+    & $BinaryPath service stop 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Stopped existing mind-map service"
+    }
 }
 
 # ---------------------------------------------------------------------------
