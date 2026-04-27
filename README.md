@@ -187,7 +187,7 @@ If you use AI coding agents, [devcontainer-mcp](https://www.anionline.me/devcont
 ```bash
 devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . bash -c "cd webui && npm install && npm run build"
-devcontainer exec --workspace-folder . bash -c "CGO_ENABLED=1 go test -tags sqlite_fts5 ./..."
+devcontainer exec --workspace-folder . bash -c "go test ./..."
 ```
 
 ### CI/CD

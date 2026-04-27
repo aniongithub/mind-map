@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // requires CGO_ENABLED=1
+	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO required)
 )
 
 // Page represents a single wiki page.
@@ -69,7 +69,7 @@ func Open(root string) (*Wiki, error) {
 	}
 
 	dbPath := filepath.Join(absRoot, ".mind-map.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
