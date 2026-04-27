@@ -82,7 +82,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 elif command -v systemctl >/dev/null 2>&1; then
   if systemctl --user is-active mind-map.service >/dev/null 2>&1; then
     echo "==> Stopping existing mind-map service..."
-    systemctl --user stop mind-map.service
+    systemctl --user stop mind-map.service 2>/dev/null || true
   fi
 fi
 
