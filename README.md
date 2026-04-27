@@ -17,7 +17,7 @@ AI agents need persistent, structured memory. Today that means:
 
 ## The Solution
 
-`mind-map` is a **server**, not an app. It runs anywhere — your laptop, a container, a VM, a [zeropoint](https://github.com/zeropoint-os) module.
+`mind-map` is a **server**, not an app. It runs anywhere — your laptop, a container or a cloud VM.
 
 1. **One protocol** — MCP over HTTP/SSE. The web UI and AI agents are both MCP clients
 2. **One binary** — Go, statically compiled, `curl | bash` to install
@@ -162,7 +162,7 @@ The wiki engine extracts:
 
 ## Development
 
-This project eats its own dogfood — development happens inside its own devcontainer.
+Development happens inside a devcontainer.
 
 ```bash
 # Spin up the devcontainer
