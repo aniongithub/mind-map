@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 
+	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )
@@ -20,15 +22,36 @@ type mindMapService struct {
 }
 
 func (m *mindMapService) Start(s service.Service) error {
+	// Default log file: ~/.mind-map/mind-map.log
+	logFile := filepath.Join(filepath.Dir(m.dir), "mind-map.log")
+
+	// Initialize logging with the system logger (journald/Event Log/syslog) + file
+	svcLogger, err := s.SystemLogger(nil)
+	if err != nil {
+		logging.Init(nil, logFile)
+		slog.Warn("could not open system logger, using file", slog.Any("error", err))
+	} else {
+		logging.Init(svcLogger, logFile)
+	}
+
+	slog.Info("mind-map service starting",
+		slog.String("addr", m.addr),
+		slog.String("dir", m.dir),
+	)
+
 	m.stopCh = make(chan struct{})
 	m.errCh = make(chan error, 1)
-	go func() {
-		m.errCh <- runHTTPServer(m.addr, m.dir, m.webui, m.stopCh)
-	}()
+	logging.SafeGo("http-server", func() {
+		if err := runHTTPServer(m.addr, m.dir, m.webui, m.stopCh); err != nil {
+			slog.Error("HTTP server failed", slog.Any("error", err))
+			m.errCh <- err
+		}
+	})
 	return nil
 }
 
 func (m *mindMapService) Stop(s service.Service) error {
+	slog.Info("mind-map service stopping")
 	if m.stopCh != nil {
 		close(m.stopCh)
 	}
@@ -36,12 +59,18 @@ func (m *mindMapService) Stop(s service.Service) error {
 }
 
 func defaultWikiDir() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", ".mind-map", "wiki")
+	}
 	return filepath.Join(home, ".mind-map", "wiki")
 }
 
 func newServiceConfig(addr, dir, webui string) *service.Config {
-	execPath, _ := os.Executable()
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "mind-map"
+	}
 	args := []string{"serve", "--addr", addr, "--dir", dir}
 	if webui != "" {
 		args = append(args, "--webui", webui)

@@ -3,6 +3,7 @@ package wiki
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,12 +24,23 @@ func (w *Wiki) GetPage(pagePath string) (*Page, error) {
 	}
 
 	var fm map[string]interface{}
-	json.Unmarshal([]byte(metaStr), &fm)
+	if err := json.Unmarshal([]byte(metaStr), &fm); err != nil {
+		slog.Warn("page metadata parse error", slog.String("page", pagePath), slog.Any("error", err))
+	}
 
-	modTime, _ := time.Parse(time.RFC3339, modified)
+	modTime, err := time.Parse(time.RFC3339, modified)
+	if err != nil {
+		slog.Warn("page modified time parse error", slog.String("page", pagePath), slog.Any("error", err))
+	}
 
-	links, _ := w.getLinks(pagePath)
-	backlinks, _ := w.getBacklinks(pagePath)
+	links, err := w.getLinks(pagePath)
+	if err != nil {
+		slog.Warn("failed to get links", slog.String("page", pagePath), slog.Any("error", err))
+	}
+	backlinks, err := w.getBacklinks(pagePath)
+	if err != nil {
+		slog.Warn("failed to get backlinks", slog.String("page", pagePath), slog.Any("error", err))
+	}
 
 	return &Page{
 		Path:        pagePath,
@@ -65,10 +77,17 @@ func (w *Wiki) ListPages(prefix string) ([]Page, error) {
 		var p Page
 		var metaStr, modified string
 		if err := rows.Scan(&p.Path, &p.Title, &metaStr, &modified); err != nil {
+			slog.Warn("list pages scan error", slog.Any("error", err))
 			continue
 		}
-		json.Unmarshal([]byte(metaStr), &p.Frontmatter)
-		p.ModifiedAt, _ = time.Parse(time.RFC3339, modified)
+		if err := json.Unmarshal([]byte(metaStr), &p.Frontmatter); err != nil {
+			slog.Warn("list pages metadata parse error", slog.String("page", p.Path), slog.Any("error", err))
+		}
+		if t, err := time.Parse(time.RFC3339, modified); err == nil {
+			p.ModifiedAt = t
+		} else {
+			slog.Warn("list pages time parse error", slog.String("page", p.Path), slog.Any("error", err))
+		}
 		pages = append(pages, p)
 	}
 	return pages, nil
@@ -95,6 +114,7 @@ func (w *Wiki) CreatePage(pagePath string, content string) error {
 		return fmt.Errorf("write page: %w", err)
 	}
 
+	slog.Info("page created", slog.String("page", pagePath))
 	return w.indexPage(pagePath)
 }
 
@@ -113,6 +133,7 @@ func (w *Wiki) UpdatePage(pagePath string, content string) error {
 		return fmt.Errorf("write page: %w", err)
 	}
 
+	slog.Info("page updated", slog.String("page", pagePath))
 	return w.indexPage(pagePath)
 }
 
@@ -127,6 +148,7 @@ func (w *Wiki) DeletePage(pagePath string) error {
 		return fmt.Errorf("delete page: %w", err)
 	}
 
+	slog.Info("page deleted", slog.String("page", pagePath))
 	return w.removePageIndex(pagePath)
 }
 
@@ -156,6 +178,7 @@ func (w *Wiki) Search(query string, limit int) ([]SearchResult, error) {
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.Path, &r.Title, &r.Snippet); err != nil {
+			slog.Warn("search scan error", slog.Any("error", err))
 			continue
 		}
 		results = append(results, r)
@@ -176,7 +199,9 @@ func (w *Wiki) Context() (*WikiContext, error) {
 	defer w.mu.RUnlock()
 
 	var count int
-	w.db.QueryRow("SELECT COUNT(*) FROM pages").Scan(&count)
+	if err := w.db.QueryRow("SELECT COUNT(*) FROM pages").Scan(&count); err != nil {
+		slog.Warn("context page count error", slog.Any("error", err))
+	}
 
 	// Recent pages
 	rows, err := w.db.Query("SELECT path, title, modified FROM pages ORDER BY modified DESC LIMIT 20")
@@ -190,9 +215,14 @@ func (w *Wiki) Context() (*WikiContext, error) {
 		var p Page
 		var modified string
 		if err := rows.Scan(&p.Path, &p.Title, &modified); err != nil {
+			slog.Warn("context scan error", slog.Any("error", err))
 			continue
 		}
-		p.ModifiedAt, _ = time.Parse(time.RFC3339, modified)
+		if t, err := time.Parse(time.RFC3339, modified); err == nil {
+			p.ModifiedAt = t
+		} else {
+			slog.Warn("context time parse error", slog.String("page", p.Path), slog.Any("error", err))
+		}
 		recent = append(recent, p)
 	}
 
@@ -245,6 +275,7 @@ func (w *Wiki) getBacklinks(pagePath string) ([]string, error) {
 func (w *Wiki) topLevelDirs() []string {
 	entries, err := os.ReadDir(w.root)
 	if err != nil {
+		slog.Warn("failed to read wiki root for top-level dirs", slog.Any("error", err))
 		return nil
 	}
 	var dirs []string

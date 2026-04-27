@@ -9,6 +9,7 @@ package wiki
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -85,11 +86,13 @@ func Open(root string) (*Wiki, error) {
 		return nil, fmt.Errorf("initial index: %w", err)
 	}
 
+	slog.Info("wiki opened", slog.String("root", absRoot))
 	return w, nil
 }
 
 // Close releases the database connection.
 func (w *Wiki) Close() error {
+	slog.Info("wiki closing", slog.String("root", w.root))
 	return w.db.Close()
 }
 

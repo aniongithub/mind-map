@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 
+	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
 	"github.com/aniongithub/mind-map/webui"
@@ -32,6 +34,7 @@ func init() {
 	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
 	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
+	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	rootCmd.AddCommand(serveCmd)
 }
@@ -39,9 +42,14 @@ func init() {
 func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 	useStdio, _ := cmd.Flags().GetBool("stdio")
+	logFile, _ := cmd.Flags().GetString("log-file")
+
+	// Initialize logging for interactive mode (stderr + optional file)
+	if f := logging.Init(nil, logFile); f != nil {
+		defer f.Close()
+	}
 
 	if useStdio {
-		// stdio mode — run inline, not as a service
 		w, err := wiki.Open(dir)
 		if err != nil {
 			return fmt.Errorf("open wiki: %w", err)
@@ -49,8 +57,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer w.Close()
 
 		s := mindmcp.NewServer(w)
-		fmt.Fprintln(os.Stderr, "mind-map MCP server (stdio mode)")
-		fmt.Fprintf(os.Stderr, "Wiki: %s\n", w.Root())
+		slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
 	}
 
@@ -60,11 +67,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	stopCh := make(chan struct{})
 
-	// Handle interrupt for interactive use
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	go func() {
 		<-ctx.Done()
+		slog.Info("received interrupt, shutting down")
 		close(stopCh)
 	}()
 
@@ -89,7 +96,6 @@ func runHTTPServer(addr, dir, webuiDir string, stopCh chan struct{}) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sseHandler)
 
-	// Serve the webui: --webui flag overrides embedded, then embedded, then fallback
 	var webFS fs.FS
 	if webuiDir != "" {
 		if _, err := os.Stat(webuiDir); err == nil {
@@ -110,19 +116,27 @@ func runHTTPServer(addr, dir, webuiDir string, stopCh chan struct{}) error {
 		})
 	}
 
-	server := &http.Server{Addr: addr, Handler: mux}
+	// Wrap with panic recovery and request logging
+	handler := logging.RecoverMiddleware(logging.RequestMiddleware(mux))
+	server := &http.Server{Addr: addr, Handler: handler}
 
-	fmt.Fprintf(os.Stderr, "mind-map server on %s (wiki: %s)\n", addr, w.Root())
-	fmt.Fprintf(os.Stderr, "MCP SSE endpoint: http://localhost%s/mcp\n", addr)
+	slog.Info("mind-map server starting",
+		slog.String("addr", addr),
+		slog.String("wiki", w.Root()),
+		slog.String("mcp_endpoint", "http://localhost"+addr+"/mcp"),
+	)
 
 	go func() {
 		<-stopCh
+		slog.Info("shutting down HTTP server")
 		server.Close()
 	}()
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("server error", slog.Any("error", err))
 		return err
 	}
+	slog.Info("server stopped")
 	return nil
 }
 
