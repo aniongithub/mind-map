@@ -226,6 +226,18 @@ SVCEOF
     echo "    Stop:   systemctl --user stop mind-map"
     echo "    Log:    journalctl --user -u mind-map"
 
+    # Offer to enable linger for headless/server use
+    if ! loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
+      echo ""
+      printf "Enable service to run without an active login session (headless/server)? [y/N] "
+      read -r ENABLE_LINGER < /dev/tty || ENABLE_LINGER="n"
+      if [[ "$ENABLE_LINGER" =~ ^[Yy]$ ]]; then
+        sudo loginctl enable-linger "$USER" 2>/dev/null && \
+          echo "==> Enabled linger for $USER" || \
+          echo "Warning: Could not enable linger (needs sudo). Run: sudo loginctl enable-linger $USER"
+      fi
+    fi
+
   else
     echo "Warning: Could not detect systemd or launchd. Service not installed."
     echo "You can run the server manually:"
