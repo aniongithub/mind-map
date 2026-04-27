@@ -81,7 +81,7 @@ Write-Ok "Using WSL distro: $WslDistro"
 
 Write-Step "Installing mind-map binary inside WSL..."
 
-$installUrl = "https://raw.githubusercontent.com/$Repo/main/install.sh"
+$installUrl = "https://github.com/$Repo/releases/latest/download/install.sh"
 $wslResult = wsl -d $WslDistro bash -c "curl -fsSL '$installUrl' | bash -s -- --skip-mcp-config" 2>&1
 $wslResult | ForEach-Object { Write-Host "    $_" }
 
@@ -177,4 +177,4 @@ Write-Host "  command: wsl" -ForegroundColor DarkGray
 Write-Host "  args:    [$WslBinaryPath, serve, --stdio]" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Start the wiki server (from WSL):" -ForegroundColor DarkGray
-Write-Host "  mind-map serve --dir ~/wiki" -ForegroundColor DarkGray
+Write-Host "  mind-map serve --dir ~/.mind-map/wiki" -ForegroundColor DarkGray

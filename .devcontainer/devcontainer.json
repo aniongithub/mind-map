@@ -37,9 +37,9 @@
       }
     }
   },
-  "forwardPorts": [8080],
+  "forwardPorts": [51849],
   "portsAttributes": {
-    "8080": {
+    "51849": {
       "label": "mind-map Server",
       "onAutoForward": "notify"
     }

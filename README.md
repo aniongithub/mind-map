@@ -72,8 +72,8 @@ The web UI is a static Preact app served from the same binary. It connects to th
 
 | Mode | Command | Use case |
 |------|---------|----------|
-| **HTTP/SSE** (default) | `mind-map serve --dir ~/wiki` | Web UI + multiple agents |
-| **stdio** | `mind-map serve --stdio --dir ~/wiki` | Single agent (Copilot, Claude Desktop, Cursor) |
+| **HTTP/SSE** (default) | `mind-map serve --dir ~/.mind-map/wiki` | Web UI + multiple agents |
+| **stdio** | `mind-map serve --stdio --dir ~/.mind-map/wiki` | Single agent (Copilot, Claude Desktop, Cursor) |
 
 Both modes use the same wiki engine, same MCP tools, same code path. The only difference is the transport.
 
@@ -119,7 +119,7 @@ The web UI speaks MCP — it's an MCP client, not a separate interface. If an ag
   "mcpServers": {
     "mind-map": {
       "command": "mind-map",
-      "args": ["serve", "--stdio", "--dir", "~/wiki"]
+      "args": ["serve", "--stdio", "--dir", "~/.mind-map/wiki"]
     }
   }
 }
@@ -132,7 +132,7 @@ The web UI speaks MCP — it's an MCP client, not a separate interface. If an ag
   "mcpServers": {
     "mind-map": {
       "command": "wsl",
-      "args": ["~/.local/bin/mind-map", "serve", "--stdio", "--dir", "~/wiki"]
+      "args": ["~/.local/bin/mind-map", "serve", "--stdio", "--dir", "~/.mind-map/wiki"]
     }
   }
 }

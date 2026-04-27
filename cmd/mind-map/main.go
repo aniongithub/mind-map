@@ -28,7 +28,7 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
-	serveCmd.Flags().StringP("addr", "a", ":8080", "Address to listen on (HTTP/SSE mode)")
+	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
 	serveCmd.Flags().String("webui", "webui/dist", "Path to the webui dist directory")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	rootCmd.AddCommand(serveCmd)
