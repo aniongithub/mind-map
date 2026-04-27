@@ -5,7 +5,7 @@ set -euo pipefail
 # Downloads the latest release binary.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/aniongithub/mind-map/main/install.sh | bash
+#   curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/install.sh | bash
 #   curl -fsSL ... | bash -s -- --install-dir /usr/local/bin
 
 REPO="aniongithub/mind-map"
@@ -74,12 +74,13 @@ mkdir -p "$INSTALL_DIR"
 
 echo "==> Downloading ${TARBALL_NAME}..."
 curl -fsSL "$DOWNLOAD_URL" | tar xz -C "${INSTALL_DIR}"
-chmod +x "${INSTALL_DIR}/mind-map"
 
 # Rename platform-specific binary to just "mind-map"
 if [[ -f "${INSTALL_DIR}/mind-map-${PLATFORM}" ]]; then
   mv "${INSTALL_DIR}/mind-map-${PLATFORM}" "${INSTALL_DIR}/mind-map"
 fi
+
+chmod +x "${INSTALL_DIR}/mind-map"
 
 # macOS: ad-hoc codesign to avoid Gatekeeper "Killed: 9"
 if [[ "$(uname -s)" == "Darwin" ]]; then
