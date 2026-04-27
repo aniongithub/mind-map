@@ -1,0 +1,15 @@
+# Build artifacts
+/mind-map
+
+# Wiki database files
+.mind-map.db
+.mind-map.db-shm
+.mind-map.db-wal
+
+# WebUI build output
+webui/dist/
+webui/node_modules/
+
+# VS Code cache
+.vscode/cache/
+__debug_bin*

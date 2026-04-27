@@ -1,0 +1,47 @@
+{
+  "name": "mind-map",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
+  "postCreateCommand": "go version && node --version",
+  "postAttachCommand": "npm install --prefix webui",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.Go",
+        "hbenl.vscode-test-explorer",
+        "ethan-reesor.vscode-go-test-adapter",
+        "idered.npm",
+        "qwtel.sqlite-viewer",
+        "dbaeumer.vscode-eslint"
+      ],
+      "settings": {
+        "go.buildTags": "sqlite_fts5",
+        "go.testTags": "sqlite_fts5",
+        "go.buildFlags": ["-tags=sqlite_fts5"],
+        "go.testEnvVars": {
+          "CGO_ENABLED": "1"
+        }
+      }
+    }
+  },
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "mind-map Server",
+      "onAutoForward": "notify"
+    }
+  }
+}

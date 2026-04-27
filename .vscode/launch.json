@@ -1,0 +1,78 @@
+{
+    "version": "0.2.0",
+    "compounds": [
+        {
+            "name": "mind-map + WebUI",
+            "configurations": [
+                "mind-map Server",
+                "WebUI"
+            ],
+            "stopAll": true
+        }
+    ],
+    "configurations": [
+        {
+            "name": "mind-map Server",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/mind-map",
+            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
+            "buildFlags": "-tags=sqlite_fts5",
+            "env": {
+                "CGO_ENABLED": "1"
+            },
+            "preLaunchTask": "build-webui"
+        },
+        {
+            "name": "mind-map Server (no WebUI)",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/mind-map",
+            "args": ["serve", "--addr", ":8080", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
+            "buildFlags": "-tags=sqlite_fts5",
+            "env": {
+                "CGO_ENABLED": "1"
+            }
+        },
+        {
+            "name": "mind-map (stdio)",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/mind-map",
+            "args": ["serve", "--stdio", "--dir", "${workspaceFolder}/testdata"],
+            "buildFlags": "-tags=sqlite_fts5",
+            "env": {
+                "CGO_ENABLED": "1"
+            }
+        },
+        {
+            "name": "WebUI",
+            "type": "chrome",
+            "request": "launch",
+            "browserLaunchLocation": "ui",
+            "runtimeExecutable": "stable",
+            "url": "http://localhost:8080",
+            "webRoot": "${workspaceFolder}/webui",
+            "preLaunchTask": "waitForServer",
+            "userDataDir": "${workspaceFolder}/.vscode/cache",
+            "sourceMaps": true,
+            "outFiles": [
+                "${workspaceFolder}/webui/dist/**/*.js"
+            ]
+        },
+        {
+            "name": "Test (all)",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/wiki",
+            "buildFlags": "-tags=sqlite_fts5",
+            "env": {
+                "CGO_ENABLED": "1"
+            }
+        }
+    ]
+}
