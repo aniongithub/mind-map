@@ -44,6 +44,37 @@ try {
     exit 1
 }
 
+# Find usable WSL distros (skip docker-desktop* distros which are minimal)
+$WslDistro = $null
+$distroLines = (wsl -l -q 2>&1) -replace "`0", "" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+$usableDistros = @($distroLines | Where-Object { $_ -notmatch '^docker-desktop' })
+
+if ($usableDistros.Count -eq 0) {
+    Write-Host ""
+    Write-Host "Error: No usable WSL distro found (docker-desktop is not supported)." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Install a Linux distro with:  wsl --install Ubuntu" -ForegroundColor Yellow
+    exit 1
+} elseif ($usableDistros.Count -eq 1) {
+    $WslDistro = $usableDistros[0]
+} else {
+    Write-Host ""
+    Write-Host "Available WSL distros:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $usableDistros.Count; $i++) {
+        Write-Host "  [$($i + 1)] $($usableDistros[$i])"
+    }
+    Write-Host ""
+    $choice = Read-Host "Select a distro (1-$($usableDistros.Count))"
+    $idx = [int]$choice - 1
+    if ($idx -lt 0 -or $idx -ge $usableDistros.Count) {
+        Write-Host "Invalid selection." -ForegroundColor Red
+        exit 1
+    }
+    $WslDistro = $usableDistros[$idx]
+}
+
+Write-Ok "Using WSL distro: $WslDistro"
+
 # ---------------------------------------------------------------------------
 # 2. Install binary inside WSL (reuse install.sh)
 # ---------------------------------------------------------------------------
@@ -51,7 +82,7 @@ try {
 Write-Step "Installing mind-map binary inside WSL..."
 
 $installUrl = "https://raw.githubusercontent.com/$Repo/main/install.sh"
-$wslResult = wsl -e /bin/bash -c "curl -fsSL '$installUrl' | bash -s -- --skip-mcp-config" 2>&1
+$wslResult = wsl -d $WslDistro bash -c "curl -fsSL '$installUrl' | bash -s -- --skip-mcp-config" 2>&1
 $wslResult | ForEach-Object { Write-Host "    $_" }
 
 if ($LASTEXITCODE -ne 0) {
@@ -62,7 +93,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Verify the binary works
-$versionCheck = wsl -e /bin/bash -lc "$WslBinaryPath --help" 2>&1
+$versionCheck = wsl -d $WslDistro bash -lc "$WslBinaryPath --help" 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Ok "Installed: mind-map"
 } else {
