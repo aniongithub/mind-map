@@ -73,8 +73,9 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL_
 mkdir -p "$INSTALL_DIR"
 
 # Stop existing service before replacing the binary
-if "${INSTALL_DIR}/mind-map" service stop 2>/dev/null; then
-  echo "==> Stopped existing mind-map service"
+if [ -f "${INSTALL_DIR}/mind-map" ]; then
+  sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null && \
+    echo "==> Stopped existing mind-map service" || true
 fi
 
 echo "==> Downloading ${TARBALL_NAME}..."
@@ -150,14 +151,21 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   USE_SSE=true
 
   # Use the built-in service manager (kardianos/service)
-  "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
-    "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
+  # System services require elevated privileges on Linux
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "==> Installing service (requires sudo)..."
+    sudo "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
+      sudo "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
+  else
+    "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
+      "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
+  fi
 
   echo ""
   echo "  Web UI:       http://localhost:${SERVICE_PORT}"
   echo "  MCP endpoint: http://localhost:${SERVICE_PORT}/mcp"
   echo ""
-  echo "  Manage with:  mind-map service status|stop|start|uninstall"
+  echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"
 fi
 
 # ---------------------------------------------------------------------------
@@ -255,7 +263,7 @@ else
 fi
 echo ""
 echo "To uninstall mind-map completely:"
-echo "  mind-map service uninstall        # remove service (if installed)"
+echo "  sudo mind-map service uninstall   # remove service (if installed)"
 echo "  rm ${INSTALL_DIR}/mind-map        # remove binary"
 echo "  rm -rf ~/.mind-map                # remove wiki data"
 echo "  rm -rf ~/.copilot/skills/mind-map ~/.claude/skills/mind-map ~/.agents/skills/mind-map"
