@@ -13,7 +13,7 @@
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Requesting administrative privileges..." -ForegroundColor Yellow
     $scriptUrl = "https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1"
-    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -Command `"& { irm '$scriptUrl' | iex }`"" -Verb RunAs
+    Start-Process powershell.exe "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& { irm '$scriptUrl' | iex }`"" -Verb RunAs
     exit
 }
 
