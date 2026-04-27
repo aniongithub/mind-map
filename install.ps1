@@ -101,72 +101,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Configure Windows-side MCP clients (with WSL bridge)
-# ---------------------------------------------------------------------------
-
-Write-Step "Configuring MCP clients..."
-
-$mcpServerEntry = @{
-    command = "wsl"
-    args    = @($WslBinaryPath, "serve", "--stdio")
-}
-
-function Set-McpConfig {
-    param(
-        [string]$ConfigPath,
-        [string]$ClientName
-    )
-
-    try {
-        if (Test-Path $ConfigPath) {
-            $content = Get-Content -Raw $ConfigPath | ConvertFrom-Json
-            if (-not $content.mcpServers) {
-                $content | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{})
-            }
-            if ($content.mcpServers.PSObject.Properties.Name -contains "mind-map") {
-                Write-Ok "$ClientName — already configured"
-                return
-            }
-            $content.mcpServers | Add-Member -NotePropertyName "mind-map" -NotePropertyValue ([PSCustomObject]$mcpServerEntry)
-            $content | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
-            Write-Ok "$ClientName — added to $ConfigPath"
-        } else {
-            $dir = Split-Path $ConfigPath -Parent
-            if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            $config = [PSCustomObject]@{
-                mcpServers = [PSCustomObject]@{
-                    "mind-map" = [PSCustomObject]$mcpServerEntry
-                }
-            }
-            $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
-            Write-Ok "$ClientName — created $ConfigPath"
-        }
-    } catch {
-        Write-Warn "$ClientName — could not update $ConfigPath"
-    }
-}
-
-# Claude Code
-Set-McpConfig "$env:USERPROFILE\.claude.json" "Claude Code"
-
-# GitHub Copilot (if .copilot dir exists)
-if (Test-Path "$env:USERPROFILE\.copilot") {
-    Set-McpConfig "$env:USERPROFILE\.copilot\mcp-config.json" "GitHub Copilot"
-}
-
-# VS Code (if config dir exists)
-$vscodeDir = "$env:APPDATA\Code\User"
-if (Test-Path $vscodeDir) {
-    Set-McpConfig "$vscodeDir\mcp.json" "VS Code"
-}
-
-# Cursor (if installed)
-if (Test-Path "$env:USERPROFILE\.cursor") {
-    Set-McpConfig "$env:USERPROFILE\.cursor\mcp.json" "Cursor"
-}
-
-# ---------------------------------------------------------------------------
-# 4. Install SKILL.md for agent discovery
+# 3. Install SKILL.md for agent discovery
 # ---------------------------------------------------------------------------
 
 Write-Step "Installing SKILL.md for agent discovery..."
@@ -189,23 +124,13 @@ foreach ($dir in $SkillDirs) {
 }
 
 # ---------------------------------------------------------------------------
-# Done
-# ---------------------------------------------------------------------------
-
-Write-Host ""
-Write-Host "Done! mind-map is ready to use." -ForegroundColor Green
-Write-Host ""
-Write-Host "MCP clients are configured to launch the server via WSL:" -ForegroundColor DarkGray
-Write-Host "  command: wsl" -ForegroundColor DarkGray
-Write-Host "  args:    [$WslBinaryPath, serve, --stdio]" -ForegroundColor DarkGray
-Write-Host ""
-
-# ---------------------------------------------------------------------------
-# 6. Interactive: set up as a persistent service
+# 5. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
 $DefaultPort = "51849"
 $DefaultWikiDir = "~/.mind-map/wiki"
+$UseSSE = $false
+$servicePort = $DefaultPort
 
 Write-Host ""
 $installService = Read-Host "Would you like to install mind-map as a persistent service? [y/N]"
@@ -219,6 +144,8 @@ if ($installService -match '^[Yy]$') {
 
     # Create wiki directory inside WSL
     wsl -d $WslDistro bash -c "mkdir -p $($serviceWikiDir -replace '~','`$HOME')" 2>&1 | Out-Null
+
+    $UseSSE = $true
 
     # Create a Scheduled Task that launches the server via WSL at logon
     $taskName = "mind-map"
@@ -255,7 +182,90 @@ if ($installService -match '^[Yy]$') {
     Write-Host ""
     Write-Host "  Web UI:       http://localhost:$servicePort" -ForegroundColor Cyan
     Write-Host "  MCP endpoint: http://localhost:$servicePort/mcp" -ForegroundColor Cyan
+}
+
+# ---------------------------------------------------------------------------
+# 6. Configure Windows-side MCP clients
+# ---------------------------------------------------------------------------
+
+Write-Step "Configuring MCP clients..."
+
+if ($UseSSE) {
+    $mcpServerEntry = @{
+        type = "sse"
+        url  = "http://localhost:$servicePort/mcp"
+    }
 } else {
+    $mcpServerEntry = @{
+        command = "wsl"
+        args    = @($WslBinaryPath, "serve", "--stdio")
+    }
+}
+
+function Set-McpConfig {
+    param(
+        [string]$ConfigPath,
+        [string]$ClientName
+    )
+
+    try {
+        if (Test-Path $ConfigPath) {
+            $content = Get-Content -Raw $ConfigPath | ConvertFrom-Json
+            if (-not $content.mcpServers) {
+                $content | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{})
+            }
+            if ($content.mcpServers.PSObject.Properties.Name -contains "mind-map") {
+                # Update existing entry
+                $content.mcpServers.PSObject.Properties.Remove("mind-map")
+            }
+            $content.mcpServers | Add-Member -NotePropertyName "mind-map" -NotePropertyValue ([PSCustomObject]$mcpServerEntry)
+            $content | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
+            Write-Ok "$ClientName — configured in $ConfigPath"
+        } else {
+            $dir = Split-Path $ConfigPath -Parent
+            if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $config = [PSCustomObject]@{
+                mcpServers = [PSCustomObject]@{
+                    "mind-map" = [PSCustomObject]$mcpServerEntry
+                }
+            }
+            $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
+            Write-Ok "$ClientName — created $ConfigPath"
+        }
+    } catch {
+        Write-Warn "$ClientName — could not update $ConfigPath"
+    }
+}
+
+# Claude Code
+Set-McpConfig "$env:USERPROFILE\.claude.json" "Claude Code"
+
+# GitHub Copilot (if .copilot dir exists)
+if (Test-Path "$env:USERPROFILE\.copilot") {
+    Set-McpConfig "$env:USERPROFILE\.copilot\mcp-config.json" "GitHub Copilot"
+}
+
+# VS Code (if config dir exists)
+$vscodeDir = "$env:APPDATA\Code\User"
+if (Test-Path $vscodeDir) {
+    Set-McpConfig "$vscodeDir\mcp.json" "VS Code"
+}
+
+# Cursor (if installed)
+if (Test-Path "$env:USERPROFILE\.cursor") {
+    Set-McpConfig "$env:USERPROFILE\.cursor\mcp.json" "Cursor"
+}
+
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+
+Write-Host ""
+if ($UseSSE) {
+    Write-Host "Done! mind-map is running as a service." -ForegroundColor Green
+} else {
+    Write-Host "Done! mind-map is ready to use." -ForegroundColor Green
+    Write-Host ""
     Write-Host "Start the wiki server (from WSL):" -ForegroundColor DarkGray
     Write-Host "  mind-map serve --dir ~/.mind-map/wiki" -ForegroundColor DarkGray
 }

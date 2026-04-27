@@ -121,91 +121,13 @@ for dir in "${SKILL_DIRS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# Auto-configure MCP clients (skipped when called from install.ps1)
-# ---------------------------------------------------------------------------
-
-if [ "$SKIP_MCP_CONFIG" = true ]; then
-  echo ""
-  echo "==> Skipping MCP client configuration (--skip-mcp-config)"
-  echo ""
-  echo "Done! mind-map binary is installed."
-  exit 0
-fi
-
-# Configure MCP clients
-configure_mcp_client() {
-  local config_file="$1"
-  local client_name="$2"
-
-  if [ ! -f "$config_file" ]; then
-    mkdir -p "$(dirname "$config_file")"
-    cat > "$config_file" << MCPEOF
-{
-  "mcpServers": {
-    "mind-map": {
-      "command": "${INSTALL_DIR}/mind-map",
-      "args": ["serve", "--stdio"]
-    }
-  }
-}
-MCPEOF
-    echo "  ✓ ${client_name} — created ${config_file}"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c "
-import json
-path = '${config_file}'
-with open(path) as f:
-    data = json.load(f)
-servers = data.setdefault('mcpServers', {})
-if 'mind-map' not in servers:
-    servers['mind-map'] = {'command': '${INSTALL_DIR}/mind-map', 'args': ['serve', '--stdio']}
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2)
-    print('  ✓ ${client_name} — added to ${config_file}')
-else:
-    print('  ✓ ${client_name} — already configured')
-" 2>/dev/null || echo "  ⚠ ${client_name} — could not update ${config_file}"
-  else
-    echo "  ⚠ ${client_name} — exists but python3 not available to merge"
-  fi
-}
-
-echo ""
-echo "==> Configuring MCP clients..."
-
-# GitHub Copilot CLI
-if [ -d "${HOME}/.copilot" ]; then
-  configure_mcp_client "${HOME}/.copilot/mcp-config.json" "GitHub Copilot"
-fi
-
-# VS Code
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  VSCODE_DIR="${HOME}/Library/Application Support/Code/User"
-else
-  VSCODE_DIR="${HOME}/.config/Code/User"
-fi
-if [ -d "$VSCODE_DIR" ]; then
-  configure_mcp_client "${VSCODE_DIR}/mcp.json" "VS Code"
-fi
-
-# Cursor
-if [ -d "${HOME}/.cursor" ]; then
-  configure_mcp_client "${HOME}/.cursor/mcp.json" "Cursor"
-fi
-
-# Claude Code
-configure_mcp_client "${HOME}/.claude.json" "Claude Code"
-
-echo ""
-echo "Done! mind-map is ready."
-echo ""
-
-# ---------------------------------------------------------------------------
 # Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
 DEFAULT_PORT="51849"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
+USE_SSE=false
+SERVICE_PORT="$DEFAULT_PORT"
 
 echo ""
 printf "Would you like to install mind-map as a persistent service? [y/N] "
@@ -221,6 +143,7 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
 
   mkdir -p "$SERVICE_WIKI_DIR"
+  USE_SSE=true
 
   if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS: launchd plist
@@ -298,7 +221,98 @@ SVCEOF
   echo ""
   echo "  Web UI:       http://localhost:${SERVICE_PORT}"
   echo "  MCP endpoint: http://localhost:${SERVICE_PORT}/mcp"
+fi
+
+# ---------------------------------------------------------------------------
+# Auto-configure MCP clients (skipped when called from install.ps1)
+# ---------------------------------------------------------------------------
+
+if [ "$SKIP_MCP_CONFIG" = true ]; then
+  echo ""
+  echo "==> Skipping MCP client configuration (--skip-mcp-config)"
+  echo ""
+  echo "Done! mind-map binary is installed."
+  exit 0
+fi
+
+# Configure MCP clients
+configure_mcp_client() {
+  local config_file="$1"
+  local client_name="$2"
+
+  local mcp_entry
+  if [ "$USE_SSE" = true ]; then
+    mcp_entry="{\"type\": \"sse\", \"url\": \"http://localhost:${SERVICE_PORT}/mcp\"}"
+  else
+    mcp_entry="{\"command\": \"${INSTALL_DIR}/mind-map\", \"args\": [\"serve\", \"--stdio\"]}"
+  fi
+
+  if [ ! -f "$config_file" ]; then
+    mkdir -p "$(dirname "$config_file")"
+    cat > "$config_file" << MCPEOF
+{
+  "mcpServers": {
+    "mind-map": ${mcp_entry}
+  }
+}
+MCPEOF
+    echo "  ✓ ${client_name} — created ${config_file}"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json
+path = '${config_file}'
+with open(path) as f:
+    data = json.load(f)
+servers = data.setdefault('mcpServers', {})
+entry = json.loads('${mcp_entry}')
+if 'mind-map' not in servers:
+    servers['mind-map'] = entry
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print('  ✓ ${client_name} — added to ${config_file}')
+else:
+    servers['mind-map'] = entry
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print('  ✓ ${client_name} — updated to $([ "$USE_SSE" = true ] && echo "SSE" || echo "stdio") in ${config_file}')
+" 2>/dev/null || echo "  ⚠ ${client_name} — could not update ${config_file}"
+  else
+    echo "  ⚠ ${client_name} — exists but python3 not available to merge"
+  fi
+}
+
+echo ""
+echo "==> Configuring MCP clients..."
+
+# GitHub Copilot CLI
+if [ -d "${HOME}/.copilot" ]; then
+  configure_mcp_client "${HOME}/.copilot/mcp-config.json" "GitHub Copilot"
+fi
+
+# VS Code
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  VSCODE_DIR="${HOME}/Library/Application Support/Code/User"
 else
+  VSCODE_DIR="${HOME}/.config/Code/User"
+fi
+if [ -d "$VSCODE_DIR" ]; then
+  configure_mcp_client "${VSCODE_DIR}/mcp.json" "VS Code"
+fi
+
+# Cursor
+if [ -d "${HOME}/.cursor" ]; then
+  configure_mcp_client "${HOME}/.cursor/mcp.json" "Cursor"
+fi
+
+# Claude Code
+configure_mcp_client "${HOME}/.claude.json" "Claude Code"
+
+echo ""
+if [ "$USE_SSE" = true ]; then
+  echo "Done! mind-map is running as a service."
+else
+  echo "Done! mind-map is ready."
+  echo ""
   echo "  Start the wiki server:  mind-map serve --dir ~/.mind-map/wiki"
   echo "  Start as MCP server:    mind-map serve --stdio --dir ~/.mind-map/wiki"
 fi
