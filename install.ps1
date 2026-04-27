@@ -153,8 +153,8 @@ if ($installService -match '^[Yy]$') {
     # Create a Scheduled Task that runs mind-map natively at logon
     $taskName = "mind-map"
     $taskAction = New-ScheduledTaskAction `
-        -Execute $BinaryPath `
-        -Argument "serve --addr :$servicePort --dir `"$serviceWikiDir`""
+        -Execute "powershell.exe" `
+        -Argument "-WindowStyle Hidden -Command & '$BinaryPath' serve --addr :$servicePort --dir '$serviceWikiDir'"
 
     $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $taskSettings = New-ScheduledTaskSettingsSet `
