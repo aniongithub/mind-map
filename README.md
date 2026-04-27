@@ -167,27 +167,18 @@ Development happens inside a [dev container](https://containers.dev/) — a repr
 You can manage the devcontainer with the [devcontainer CLI](https://github.com/devcontainers/cli), [DevPod](https://devpod.sh/), or [GitHub Codespaces](https://github.com/features/codespaces). If you use AI coding agents, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp) lets the agent spin up and work inside the container directly.
 
 ```bash
-# Spin up the devcontainer
-devcontainer up --workspace-folder .
+# Open in VS Code — it will prompt to reopen in the devcontainer
+code .
 
-# Build webui
-devcontainer exec --workspace-folder . bash -c "cd webui && npm install && npm run build"
-
-# Run tests
-devcontainer exec --workspace-folder . bash -c "CGO_ENABLED=1 go test -tags sqlite_fts5 ./..."
-
-# Build binary
-devcontainer exec --workspace-folder . bash -c "CGO_ENABLED=1 go build -tags sqlite_fts5 -o mind-map ./cmd/mind-map/"
+# Or clone and open directly in a devcontainer
+# VS Code: Ctrl+Shift+P → "Dev Containers: Clone Repository in Container Volume"
 ```
 
-### VS Code
+Once inside the container, everything is ready:
 
-Attach to the devcontainer and use:
-
-- **`mind-map + WebUI`** — compound launch: starts Go server + opens Chrome
-- **`mind-map Server`** — Go server only (builds webui first)
 - **`Ctrl+Shift+B`** — build webui (default build task)
-- **`watch-webui`** — webpack watch for live reload
+- **`F5`** with **`mind-map + WebUI`** — starts the Go server + opens Chrome
+- **`watch-webui`** task — webpack watch for live reload
 
 ### CI/CD
 
