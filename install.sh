@@ -199,6 +199,107 @@ configure_mcp_client "${HOME}/.claude.json" "Claude Code"
 echo ""
 echo "Done! mind-map is ready."
 echo ""
-echo "  Start the wiki server:  mind-map serve --dir ~/.mind-map/wiki"
-echo "  Start as MCP server:    mind-map serve --stdio --dir ~/.mind-map/wiki"
+
+# ---------------------------------------------------------------------------
+# Interactive: set up as a persistent service
+# ---------------------------------------------------------------------------
+
+DEFAULT_PORT="51849"
+DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
+
+echo ""
+printf "Would you like to install mind-map as a persistent service? [y/N] "
+read -r INSTALL_SERVICE < /dev/tty || INSTALL_SERVICE="n"
+
+if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
+  printf "Port [${DEFAULT_PORT}]: "
+  read -r SERVICE_PORT < /dev/tty || SERVICE_PORT=""
+  SERVICE_PORT="${SERVICE_PORT:-$DEFAULT_PORT}"
+
+  printf "Wiki directory [${DEFAULT_WIKI_DIR}]: "
+  read -r SERVICE_WIKI_DIR < /dev/tty || SERVICE_WIKI_DIR=""
+  SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
+
+  mkdir -p "$SERVICE_WIKI_DIR"
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS: launchd plist
+    PLIST_PATH="${HOME}/Library/LaunchAgents/me.anionline.mind-map.plist"
+    mkdir -p "$(dirname "$PLIST_PATH")"
+    cat > "$PLIST_PATH" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>me.anionline.mind-map</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/mind-map</string>
+        <string>serve</string>
+        <string>--addr</string>
+        <string>:${SERVICE_PORT}</string>
+        <string>--dir</string>
+        <string>${SERVICE_WIKI_DIR}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${HOME}/.mind-map/mind-map.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/.mind-map/mind-map.log</string>
+</dict>
+</plist>
+PLISTEOF
+    mkdir -p "${HOME}/.mind-map"
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    launchctl load "$PLIST_PATH"
+    echo "==> Installed and started launchd service"
+    echo "    Plist:  ${PLIST_PATH}"
+    echo "    Log:    ${HOME}/.mind-map/mind-map.log"
+    echo "    Stop:   launchctl unload ${PLIST_PATH}"
+    echo "    Start:  launchctl load ${PLIST_PATH}"
+
+  elif command -v systemctl >/dev/null 2>&1; then
+    # Linux: systemd user service
+    SERVICE_DIR="${HOME}/.config/systemd/user"
+    SERVICE_PATH="${SERVICE_DIR}/mind-map.service"
+    mkdir -p "$SERVICE_DIR"
+    cat > "$SERVICE_PATH" << SVCEOF
+[Unit]
+Description=mind-map wiki server
+After=network.target
+
+[Service]
+ExecStart=${INSTALL_DIR}/mind-map serve --addr :${SERVICE_PORT} --dir ${SERVICE_WIKI_DIR}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+SVCEOF
+    systemctl --user daemon-reload
+    systemctl --user enable mind-map.service
+    systemctl --user start mind-map.service
+    echo "==> Installed and started systemd user service"
+    echo "    Unit:   ${SERVICE_PATH}"
+    echo "    Status: systemctl --user status mind-map"
+    echo "    Stop:   systemctl --user stop mind-map"
+    echo "    Log:    journalctl --user -u mind-map"
+
+  else
+    echo "Warning: Could not detect systemd or launchd. Service not installed."
+    echo "You can run the server manually:"
+    echo "  mind-map serve --addr :${SERVICE_PORT} --dir ${SERVICE_WIKI_DIR}"
+  fi
+
+  echo ""
+  echo "  Web UI:       http://localhost:${SERVICE_PORT}"
+  echo "  MCP endpoint: http://localhost:${SERVICE_PORT}/mcp"
+else
+  echo "  Start the wiki server:  mind-map serve --dir ~/.mind-map/wiki"
+  echo "  Start as MCP server:    mind-map serve --stdio --dir ~/.mind-map/wiki"
+fi
 echo ""

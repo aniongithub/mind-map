@@ -199,5 +199,63 @@ Write-Host "MCP clients are configured to launch the server via WSL:" -Foregroun
 Write-Host "  command: wsl" -ForegroundColor DarkGray
 Write-Host "  args:    [$WslBinaryPath, serve, --stdio]" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "Start the wiki server (from WSL):" -ForegroundColor DarkGray
-Write-Host "  mind-map serve --dir ~/.mind-map/wiki" -ForegroundColor DarkGray
+
+# ---------------------------------------------------------------------------
+# 6. Interactive: set up as a persistent service
+# ---------------------------------------------------------------------------
+
+$DefaultPort = "51849"
+$DefaultWikiDir = "~/.mind-map/wiki"
+
+Write-Host ""
+$installService = Read-Host "Would you like to install mind-map as a persistent service? [y/N]"
+
+if ($installService -match '^[Yy]$') {
+    $servicePort = Read-Host "Port [$DefaultPort]"
+    if ([string]::IsNullOrWhiteSpace($servicePort)) { $servicePort = $DefaultPort }
+
+    $serviceWikiDir = Read-Host "Wiki directory [$DefaultWikiDir]"
+    if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
+
+    # Create wiki directory inside WSL
+    wsl -d $WslDistro bash -c "mkdir -p $($serviceWikiDir -replace '~','`$HOME')" 2>&1 | Out-Null
+
+    # Create a Scheduled Task that launches the server via WSL at logon
+    $taskName = "mind-map"
+    $taskAction = New-ScheduledTaskAction `
+        -Execute "wsl.exe" `
+        -Argument "-d $WslDistro $WslBinaryPath serve --addr :$servicePort --dir $serviceWikiDir"
+
+    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $taskSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -RestartCount 3 `
+        -RestartInterval ([TimeSpan]::FromMinutes(1))
+
+    # Remove existing task if present
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $taskAction `
+        -Trigger $taskTrigger `
+        -Settings $taskSettings `
+        -Description "mind-map wiki server (via WSL)" | Out-Null
+
+    # Start it now
+    Start-ScheduledTask -TaskName $taskName
+
+    Write-Host ""
+    Write-Ok "Installed and started scheduled task '$taskName'"
+    Write-Host "    Status: Get-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
+    Write-Host "    Stop:   Stop-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
+    Write-Host "    Remove: Unregister-ScheduledTask -TaskName '$taskName'" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Web UI:       http://localhost:$servicePort" -ForegroundColor Cyan
+    Write-Host "  MCP endpoint: http://localhost:$servicePort/mcp" -ForegroundColor Cyan
+} else {
+    Write-Host "Start the wiki server (from WSL):" -ForegroundColor DarkGray
+    Write-Host "  mind-map serve --dir ~/.mind-map/wiki" -ForegroundColor DarkGray
+}
