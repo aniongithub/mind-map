@@ -81,6 +81,13 @@ Write-Ok "Using WSL distro: $WslDistro"
 
 Write-Step "Installing mind-map binary inside WSL..."
 
+# Stop existing scheduled task before replacing the binary
+$existingTask = Get-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
+if ($existingTask) {
+    Write-Host "    Stopping existing mind-map service..." -ForegroundColor DarkGray
+    Stop-ScheduledTask -TaskName "mind-map" -ErrorAction SilentlyContinue
+}
+
 $installUrl = "https://github.com/$Repo/releases/latest/download/install.sh"
 $wslResult = wsl -d $WslDistro bash -c "curl -fsSL '$installUrl' | bash -s -- --skip-mcp-config" 2>&1
 $wslResult | ForEach-Object { Write-Host "    $_" }

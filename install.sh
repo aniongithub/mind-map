@@ -72,6 +72,20 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL_
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
+# Stop existing service before replacing the binary
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  PLIST_PATH="${HOME}/Library/LaunchAgents/me.anionline.mind-map.plist"
+  if [[ -f "$PLIST_PATH" ]]; then
+    echo "==> Stopping existing mind-map service..."
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  fi
+elif command -v systemctl >/dev/null 2>&1; then
+  if systemctl --user is-active mind-map.service >/dev/null 2>&1; then
+    echo "==> Stopping existing mind-map service..."
+    systemctl --user stop mind-map.service
+  fi
+fi
+
 echo "==> Downloading ${TARBALL_NAME}..."
 curl -fsSL "$DOWNLOAD_URL" | tar xz -C "${INSTALL_DIR}"
 
