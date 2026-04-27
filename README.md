@@ -164,7 +164,7 @@ The wiki engine extracts:
 
 Development happens inside a [dev container](https://containers.dev/) — a reproducible, containerized environment defined by `.devcontainer/devcontainer.json`. This means no local Go or Node install required; everything runs in the container.
 
-You can manage the devcontainer with VS Code, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp), or the [devcontainer CLI](https://github.com/devcontainers/cli).
+You can manage the devcontainer with VS Code, [devcontainer-mcp](https://www.anionline.me/devcontainer-mcp/), or the [devcontainer CLI](https://github.com/devcontainers/cli).
 
 ### VS Code (recommended)
 
@@ -180,7 +180,7 @@ Once inside, everything is ready:
 
 ### devcontainer-mcp
 
-If you use AI coding agents, [devcontainer-mcp](https://github.com/aniongithub/devcontainer-mcp) lets the agent spin up and work inside the container directly — no manual setup.
+If you use AI coding agents, [devcontainer-mcp](https://www.anionline.me/devcontainer-mcp/) lets the agent spin up and work inside the container directly — no manual setup.
 
 ### CLI
 
