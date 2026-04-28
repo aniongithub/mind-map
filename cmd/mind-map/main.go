@@ -13,6 +13,7 @@ import (
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
 	"github.com/aniongithub/mind-map/webui"
+	"github.com/kardianos/service"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +37,8 @@ func init() {
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
+	serveCmd.Flags().Bool("run-as-service", false, "Run via kardianos/service (used by service manager)")
+	serveCmd.Flags().MarkHidden("run-as-service")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -43,6 +46,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 	useStdio, _ := cmd.Flags().GetBool("stdio")
 	logFile, _ := cmd.Flags().GetString("log-file")
+	runAsService, _ := cmd.Flags().GetBool("run-as-service")
+
+	if runAsService {
+		// Launched by the OS service manager — delegate to kardianos/service
+		addr, _ := cmd.Flags().GetString("addr")
+		webuiDir, _ := cmd.Flags().GetString("webui")
+		prg := &mindMapService{addr: addr, dir: dir, webui: webuiDir}
+		svc, err := service.New(prg, newServiceConfig(addr, dir, webuiDir))
+		if err != nil {
+			return fmt.Errorf("create service: %w", err)
+		}
+		return svc.Run()
+	}
 
 	// Initialize logging for interactive mode (stderr + optional file)
 	if f := logging.Init(nil, logFile); f != nil {
@@ -61,7 +77,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
 	}
 
-	// HTTP/SSE mode
+	// HTTP/SSE mode (interactive)
 	addr, _ := cmd.Flags().GetString("addr")
 	webuiDir, _ := cmd.Flags().GetString("webui")
 

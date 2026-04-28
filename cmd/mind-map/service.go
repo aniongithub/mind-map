@@ -71,7 +71,7 @@ func newServiceConfig(addr, dir, webui string) *service.Config {
 	if err != nil {
 		execPath = "mind-map"
 	}
-	args := []string{"serve", "--addr", addr, "--dir", dir}
+	args := []string{"serve", "--run-as-service", "--addr", addr, "--dir", dir}
 	if webui != "" {
 		args = append(args, "--webui", webui)
 	}

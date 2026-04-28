@@ -169,6 +169,7 @@ func RecoverMiddleware(next http.Handler) http.Handler {
 }
 
 // responseCapture wraps http.ResponseWriter to capture the status code.
+// It preserves http.Flusher and http.Hijacker for SSE compatibility.
 type responseCapture struct {
 	http.ResponseWriter
 	status int
@@ -179,7 +180,14 @@ func (rc *responseCapture) WriteHeader(code int) {
 	rc.ResponseWriter.WriteHeader(code)
 }
 
+func (rc *responseCapture) Flush() {
+	if f, ok := rc.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // RequestMiddleware logs HTTP requests with method, path, status, and duration.
+// SSE connections (/mcp) are logged at connect time only, not on completion.
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
