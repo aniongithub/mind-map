@@ -1,6 +1,11 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { mcp, Page } from './mcp';
 import { marked } from 'marked';
+import mermaid from 'mermaid';
+
+mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
+let mermaidCounter = 0;
 
 export function App() {
     const [pages, setPages] = useState<Page[]>([]);
@@ -110,8 +115,30 @@ export function App() {
             const label = display || target;
             return `[${label}](#/${target})`;
         });
-        return marked.parse(withLinks, { async: false }) as string;
+        // Replace mermaid code blocks with placeholder divs
+        const withMermaid = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
+            const id = `mermaid-${++mermaidCounter}`;
+            return `<div class="mermaid" id="${id}">${code.trim()}</div>`;
+        });
+        return marked.parse(withMermaid, { async: false }) as string;
     };
+
+    const bodyRef = useRef<HTMLDivElement>(null);
+
+    // Render mermaid diagrams after DOM update
+    useEffect(() => {
+        if (bodyRef.current && !editing) {
+            const els = bodyRef.current.querySelectorAll('.mermaid');
+            if (els.length > 0) {
+                // Update mermaid theme to match current mode
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: isDark ? 'dark' : 'default',
+                });
+                mermaid.run({ nodes: els as unknown as ArrayLike<HTMLElement> });
+            }
+        }
+    }, [current, editing, isDark]);
 
     const pageCount = pages.length;
 
@@ -184,7 +211,7 @@ export function App() {
                             </div>
                         ) : (
                             <>
-                                <div class="page-body">
+                                <div class="page-body" ref={bodyRef}>
                                     <div
                                         class="markdown"
                                         dangerouslySetInnerHTML={{ __html: renderMarkdown(current.body) }}
