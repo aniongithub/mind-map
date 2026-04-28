@@ -142,7 +142,7 @@ foreach ($dir in $SkillDirs) {
 # ---------------------------------------------------------------------------
 
 $DefaultPort = "51849"
-$DefaultWikiDir = "$env:USERPROFILE\.mind-map\wiki"
+$DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $UseSSE = $false
 $servicePort = $DefaultPort
 
