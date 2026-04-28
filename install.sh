@@ -154,9 +154,14 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   # System services require elevated privileges on Linux
   if [[ "$(uname -s)" == "Linux" ]]; then
     echo "==> Installing service (requires sudo)..."
+    # Uninstall existing service if present (handles reinstall)
+    sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null || true
+    sudo "${INSTALL_DIR}/mind-map" service uninstall 2>/dev/null || true
     sudo "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
       sudo "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
   else
+    "${INSTALL_DIR}/mind-map" service stop 2>/dev/null || true
+    "${INSTALL_DIR}/mind-map" service uninstall 2>/dev/null || true
     "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
       "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
   fi

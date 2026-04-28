@@ -158,6 +158,12 @@ if ($installService -match '^[Yy]$') {
 
     $UseSSE = $true
 
+    # Uninstall existing service if present (handles reinstall)
+    $ErrorActionPreference = "Continue"
+    & $BinaryPath service stop 2>&1 | Out-Null
+    & $BinaryPath service uninstall 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
+
     # Install and start the service (already running as admin)
     & $BinaryPath service install --addr ":$servicePort" --dir "$serviceWikiDir"
     & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
