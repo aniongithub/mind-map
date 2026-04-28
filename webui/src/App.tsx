@@ -115,12 +115,23 @@ export function App() {
             const label = display || target;
             return `[${label}](#/${target})`;
         });
-        // Replace mermaid code blocks with placeholder divs
-        const withMermaid = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
+
+        // Extract mermaid blocks before marked processing to prevent HTML escaping
+        const mermaidBlocks: Record<string, string> = {};
+        const withPlaceholders = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
             const id = `mermaid-${++mermaidCounter}`;
-            return `<div class="mermaid" id="${id}">${code.trim()}</div>`;
+            mermaidBlocks[id] = code.trim();
+            return `<div class="mermaid" id="${id}">MERMAID_PLACEHOLDER_${id}</div>`;
         });
-        return marked.parse(withMermaid, { async: false }) as string;
+
+        let html = marked.parse(withPlaceholders, { async: false }) as string;
+
+        // Re-inject raw mermaid code after marked processing
+        for (const [id, code] of Object.entries(mermaidBlocks)) {
+            html = html.replace(`MERMAID_PLACEHOLDER_${id}`, code);
+        }
+
+        return html;
     };
 
     const bodyRef = useRef<HTMLDivElement>(null);
