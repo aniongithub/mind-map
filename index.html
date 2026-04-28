@@ -59,7 +59,7 @@
             <button class="install-tab" data-platform="windows" onclick="switchInstallTab('windows', this)">Windows</button>
           </div>
           <div class="install-box" id="install-unix">
-            <code id="install-cmd-unix">curl -fsSL https://raw.githubusercontent.com/aniongithub/mind-map/main/install.sh | bash</code>
+            <code id="install-cmd-unix">curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/install.sh | bash</code>
             <button class="copy-btn" onclick="copyText('install-cmd-unix', this)" title="Copy to clipboard">
               <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -83,7 +83,7 @@
             </button>
           </div>
         </div>
-        <p class="install-note" id="install-note-windows" style="visibility:hidden">Runs inside WSL — MCP clients on Windows launch via <code>wsl</code> bridge. Requires <a href="https://learn.microsoft.com/en-us/windows/wsl/install">WSL 2</a>.</p>
+        <p class="install-note" id="install-note-windows" style="visibility:hidden">Native Windows binary — no WSL required.</p>
       </div>
       <div class="hero-works-with">
         <span class="works-with-label">works with</span>
@@ -103,7 +103,7 @@
         </div>
       </div>
       <div class="hero-platforms">
-        linux-x64 · linux-arm64 · darwin-x64 · darwin-arm64 · windows (WSL)
+        linux-x64 · linux-arm64 · darwin-x64 · darwin-arm64 · windows-x64 · windows-arm64
       </div>
     </div>
   </section>
@@ -144,14 +144,9 @@
   <section class="section section-dark" id="how">
     <div class="section-inner">
       <h2 class="section-title">How it works</h2>
-      <p class="section-sub">One protocol. One server. Two kinds of clients.</p>
+      <p class="section-sub">One protocol. One server. Two kinds of clients. Edit in the browser — agents see the change instantly.</p>
       <div class="demo-container">
-        <!-- TODO: Replace with actual screengrab -->
-        <div class="demo-placeholder">
-          <div class="demo-placeholder-icon">🎬</div>
-          <p>Agent creating a wiki page and recalling it later</p>
-          <span class="demo-placeholder-note">screengrabs/agent-memory.gif</span>
-        </div>
+        <img src="screengrabs/mind-map-save-edit-retrieve.gif" alt="Agent saving a preference, editing it, then recalling the changed answer" class="demo-gif" />
       </div>
     </div>
   </section>
@@ -217,14 +212,9 @@
   <section class="section section-dark" id="webui">
     <div class="section-inner">
       <h2 class="section-title">Built-in web UI</h2>
-      <p class="section-sub">Browse, search, and edit your wiki from any browser. Metro-inspired, chromeless design.</p>
+      <p class="section-sub">Browse, search, and edit your wiki from any browser. Metro-inspired, blazing-fast chromeless design.<br>All in one native executable.</p>
       <div class="demo-container">
-        <!-- TODO: Replace with actual screengrab -->
-        <div class="demo-placeholder">
-          <div class="demo-placeholder-icon">🎬</div>
-          <p>Browsing the wiki, clicking wikilinks, viewing backlinks</p>
-          <span class="demo-placeholder-note">screengrabs/webui-browse.gif</span>
-        </div>
+        <img src="screengrabs/mind-map-wiki-demo.gif" alt="Browsing the wiki, clicking wikilinks, viewing backlinks and mermaid diagrams" class="demo-gif" />
       </div>
       <div class="cards" style="margin-top: 2rem">
         <div class="card">
@@ -282,22 +272,6 @@
             <li><strong>list_pages</strong> <span>List pages, optionally filtered by path prefix</span></li>
             <li><strong>get_backlinks</strong> <span>Get all pages that link to a given page</span></li>
           </ul>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Editing demo -->
-  <section class="section">
-    <div class="section-inner">
-      <h2 class="section-title">Edit from the browser</h2>
-      <p class="section-sub">Click edit, write markdown, save. Agents see the changes immediately.</p>
-      <div class="demo-container">
-        <!-- TODO: Replace with actual screengrab -->
-        <div class="demo-placeholder">
-          <div class="demo-placeholder-icon">🎬</div>
-          <p>Editing a page in the web UI, then an agent reading the updated content</p>
-          <span class="demo-placeholder-note">screengrabs/webui-edit.gif</span>
         </div>
       </div>
     </div>

@@ -197,7 +197,7 @@ code { font-family: var(--mono); font-size: 0.875em; }
 .tool-group-wide li span { color: var(--text-dim); }
 
 /* ---- Demo placeholders ---- */
-.demo-container { max-width: 700px; margin: 0 auto; }
+.demo-container { max-width: 900px; margin: 0 auto; }
 .demo-gif { max-width: 100%; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3); }
 .demo-placeholder {
   background: var(--bg-card); border: 1px dashed var(--border);

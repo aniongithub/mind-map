@@ -1,1 +1,4 @@
 node_modules
+webui/
+mind-map
+.mind-map.db*
