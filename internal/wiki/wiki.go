@@ -7,6 +7,7 @@
 package wiki
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -74,6 +75,7 @@ func Open(root string) (*Wiki, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	w := &Wiki{root: absRoot, db: db}
 	if err := w.initSchema(); err != nil {
@@ -81,7 +83,7 @@ func Open(root string) (*Wiki, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
-	if err := w.Reindex(); err != nil {
+	if err := w.Reindex(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initial index: %w", err)
 	}
