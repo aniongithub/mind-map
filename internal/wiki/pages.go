@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,12 +12,16 @@ import (
 )
 
 // GetPage retrieves a single page by path.
-func (w *Wiki) GetPage(pagePath string) (*Page, error) {
+func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var title, body, metaStr, modified string
-	err := w.db.QueryRow(
+	err := w.db.QueryRowContext(ctx,
 		"SELECT title, body, meta, modified FROM pages WHERE path = ?", pagePath,
 	).Scan(&title, &body, &metaStr, &modified)
 	if err != nil {
@@ -33,11 +38,11 @@ func (w *Wiki) GetPage(pagePath string) (*Page, error) {
 		slog.Warn("page modified time parse error", slog.String("page", pagePath), slog.Any("error", err))
 	}
 
-	links, err := w.getLinks(pagePath)
+	links, err := w.getLinks(ctx, pagePath)
 	if err != nil {
 		slog.Warn("failed to get links", slog.String("page", pagePath), slog.Any("error", err))
 	}
-	backlinks, err := w.getBacklinks(pagePath)
+	backlinks, err := w.getBacklinks(ctx, pagePath)
 	if err != nil {
 		slog.Warn("failed to get backlinks", slog.String("page", pagePath), slog.Any("error", err))
 	}
@@ -54,9 +59,13 @@ func (w *Wiki) GetPage(pagePath string) (*Page, error) {
 }
 
 // ListPages returns all pages, optionally filtered by a prefix path.
-func (w *Wiki) ListPages(prefix string) ([]Page, error) {
+func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	query := "SELECT path, title, meta, modified FROM pages"
 	var args []interface{}
@@ -66,7 +75,7 @@ func (w *Wiki) ListPages(prefix string) ([]Page, error) {
 	}
 	query += " ORDER BY modified DESC"
 
-	rows, err := w.db.Query(query, args...)
+	rows, err := w.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,9 +103,13 @@ func (w *Wiki) ListPages(prefix string) ([]Page, error) {
 }
 
 // CreatePage creates a new page with the given content.
-func (w *Wiki) CreatePage(pagePath string, content string) error {
+func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -115,13 +128,17 @@ func (w *Wiki) CreatePage(pagePath string, content string) error {
 	}
 
 	slog.Info("page created", slog.String("page", pagePath))
-	return w.indexPage(pagePath)
+	return w.indexPage(ctx, pagePath)
 }
 
 // UpdatePage replaces the content of an existing page.
-func (w *Wiki) UpdatePage(pagePath string, content string) error {
+func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -134,13 +151,17 @@ func (w *Wiki) UpdatePage(pagePath string, content string) error {
 	}
 
 	slog.Info("page updated", slog.String("page", pagePath))
-	return w.indexPage(pagePath)
+	return w.indexPage(ctx, pagePath)
 }
 
 // DeletePage removes a page from the filesystem and index.
-func (w *Wiki) DeletePage(pagePath string) error {
+func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -149,19 +170,23 @@ func (w *Wiki) DeletePage(pagePath string) error {
 	}
 
 	slog.Info("page deleted", slog.String("page", pagePath))
-	return w.removePageIndex(pagePath)
+	return w.removePageIndex(ctx, pagePath)
 }
 
 // Search performs a full-text search across page titles and bodies.
-func (w *Wiki) Search(query string, limit int) ([]SearchResult, error) {
+func (w *Wiki) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if limit <= 0 {
 		limit = 20
 	}
 
-	rows, err := w.db.Query(`
+	rows, err := w.db.QueryContext(ctx, `
 		SELECT p.path, p.title, snippet(pages_fts, 2, '<mark>', '</mark>', '…', 32) as snip
 		FROM pages_fts
 		JOIN pages p ON p.rowid = pages_fts.rowid
@@ -187,24 +212,33 @@ func (w *Wiki) Search(query string, limit int) ([]SearchResult, error) {
 }
 
 // GetBacklinks returns paths of pages that link to the given page.
-func (w *Wiki) GetBacklinks(pagePath string) ([]string, error) {
+func (w *Wiki) GetBacklinks(ctx context.Context, pagePath string) ([]string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.getBacklinks(pagePath)
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	return w.getBacklinks(ctx, pagePath)
 }
 
 // Context returns a WikiContext overview.
-func (w *Wiki) Context() (*WikiContext, error) {
+func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var count int
-	if err := w.db.QueryRow("SELECT COUNT(*) FROM pages").Scan(&count); err != nil {
+	if err := w.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pages").Scan(&count); err != nil {
 		slog.Warn("context page count error", slog.Any("error", err))
 	}
 
 	// Recent pages
-	rows, err := w.db.Query("SELECT path, title, modified FROM pages ORDER BY modified DESC LIMIT 20")
+	rows, err := w.db.QueryContext(ctx, "SELECT path, title, modified FROM pages ORDER BY modified DESC LIMIT 20")
 	if err != nil {
 		return nil, err
 	}
@@ -238,8 +272,8 @@ func (w *Wiki) Context() (*WikiContext, error) {
 
 // --- internal helpers ---
 
-func (w *Wiki) getLinks(pagePath string) ([]string, error) {
-	rows, err := w.db.Query("SELECT target FROM links WHERE source = ?", pagePath)
+func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) {
+	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ?", pagePath)
 	if err != nil {
 		return nil, err
 	}
@@ -255,8 +289,8 @@ func (w *Wiki) getLinks(pagePath string) ([]string, error) {
 	return links, nil
 }
 
-func (w *Wiki) getBacklinks(pagePath string) ([]string, error) {
-	rows, err := w.db.Query("SELECT source FROM links WHERE target = ?", pagePath)
+func (w *Wiki) getBacklinks(ctx context.Context, pagePath string) ([]string, error) {
+	rows, err := w.db.QueryContext(ctx, "SELECT source FROM links WHERE target = ?", pagePath)
 	if err != nil {
 		return nil, err
 	}

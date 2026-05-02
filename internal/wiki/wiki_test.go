@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,19 +63,19 @@ func writeFile(t *testing.T, root, relPath, content string) {
 
 func TestOpenAndPageCount(t *testing.T) {
 	w, _ := testWiki(t)
-	ctx, err := w.Context()
+	wctx, err := w.Context(context.Background())
 	if err != nil {
 		t.Fatalf("Context: %v", err)
 	}
-	if ctx.PageCount != 4 {
-		t.Errorf("PageCount = %d, want 4", ctx.PageCount)
+	if wctx.PageCount != 4 {
+		t.Errorf("PageCount = %d, want 4", wctx.PageCount)
 	}
 }
 
 func TestGetPage(t *testing.T) {
 	w, _ := testWiki(t)
 
-	p, err := w.GetPage("projects/mind-map")
+	p, err := w.GetPage(context.Background(), "projects/mind-map")
 	if err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestGetPage(t *testing.T) {
 func TestBacklinks(t *testing.T) {
 	w, _ := testWiki(t)
 
-	backlinks, err := w.GetBacklinks("projects/mind-map")
+	backlinks, err := w.GetBacklinks(context.Background(), "projects/mind-map")
 	if err != nil {
 		t.Fatalf("GetBacklinks: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestBacklinks(t *testing.T) {
 func TestSearch(t *testing.T) {
 	w, _ := testWiki(t)
 
-	results, err := w.Search("wiki engine", 10)
+	results, err := w.Search(context.Background(), "wiki engine", 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -128,12 +129,12 @@ title: New Page
 
 This is new. Links to [[index]].
 `
-	err := w.CreatePage("new-page", content)
+	err := w.CreatePage(context.Background(), "new-page", content)
 	if err != nil {
 		t.Fatalf("CreatePage: %v", err)
 	}
 
-	p, err := w.GetPage("new-page")
+	p, err := w.GetPage(context.Background(), "new-page")
 	if err != nil {
 		t.Fatalf("GetPage after create: %v", err)
 	}
@@ -155,12 +156,12 @@ title: Updated Home
 
 Now links to [[Go]] only.
 `
-	err := w.UpdatePage("index", newContent)
+	err := w.UpdatePage(context.Background(), "index", newContent)
 	if err != nil {
 		t.Fatalf("UpdatePage: %v", err)
 	}
 
-	p, err := w.GetPage("index")
+	p, err := w.GetPage(context.Background(), "index")
 	if err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
@@ -175,12 +176,12 @@ Now links to [[Go]] only.
 func TestDeletePage(t *testing.T) {
 	w, _ := testWiki(t)
 
-	err := w.DeletePage("Go")
+	err := w.DeletePage(context.Background(), "Go")
 	if err != nil {
 		t.Fatalf("DeletePage: %v", err)
 	}
 
-	_, err = w.GetPage("Go")
+	_, err = w.GetPage(context.Background(), "Go")
 	if err == nil {
 		t.Error("GetPage after delete should fail")
 	}
@@ -190,7 +191,7 @@ func TestListPages(t *testing.T) {
 	w, _ := testWiki(t)
 
 	// All pages
-	all, err := w.ListPages("")
+	all, err := w.ListPages(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListPages: %v", err)
 	}
@@ -199,7 +200,7 @@ func TestListPages(t *testing.T) {
 	}
 
 	// Filtered by prefix
-	projects, err := w.ListPages("projects")
+	projects, err := w.ListPages(context.Background(), "projects")
 	if err != nil {
 		t.Fatalf("ListPages(projects): %v", err)
 	}
@@ -236,16 +237,16 @@ func TestWikilinks(t *testing.T) {
 
 func TestContextTopLevelDirs(t *testing.T) {
 	w, _ := testWiki(t)
-	ctx, err := w.Context()
+	wctx, err := w.Context(context.Background())
 	if err != nil {
 		t.Fatalf("Context: %v", err)
 	}
 	// Should have "projects" and "people"
 	found := map[string]bool{}
-	for _, d := range ctx.TopLevelDirs {
+	for _, d := range wctx.TopLevelDirs {
 		found[d] = true
 	}
 	if !found["projects"] || !found["people"] {
-		t.Errorf("TopLevelDirs = %v, expected projects and people", ctx.TopLevelDirs)
+		t.Errorf("TopLevelDirs = %v, expected projects and people", wctx.TopLevelDirs)
 	}
 }

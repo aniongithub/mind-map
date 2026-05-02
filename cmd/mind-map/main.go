@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/aniongithub/mind-map/internal/wiki"
@@ -37,6 +38,7 @@ func init() {
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
+	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
 	serveCmd.Flags().Bool("run-as-service", false, "Run via kardianos/service (used by service manager)")
 	serveCmd.Flags().MarkHidden("run-as-service")
 	rootCmd.AddCommand(serveCmd)
@@ -52,8 +54,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		// Launched by the OS service manager — delegate to kardianos/service
 		addr, _ := cmd.Flags().GetString("addr")
 		webuiDir, _ := cmd.Flags().GetString("webui")
-		prg := &mindMapService{addr: addr, dir: dir, webui: webuiDir}
-		svc, err := service.New(prg, newServiceConfig(addr, dir, webuiDir))
+		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		prg := &mindMapService{addr: addr, dir: dir, webui: webuiDir, idleTimeout: idleTimeout}
+		svc, err := service.New(prg, newServiceConfig(addr, dir, webuiDir, idleTimeout))
 		if err != nil {
 			return fmt.Errorf("create service: %w", err)
 		}
@@ -91,22 +94,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		close(stopCh)
 	}()
 
-	return runHTTPServer(addr, dir, webuiDir, stopCh)
+	// read idle-timeout for the non-service path
+	idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+
+	return runHTTPServer(addr, dir, webuiDir, idleTimeout, stopCh)
 }
 
 // runHTTPServer starts the HTTP/SSE server and blocks until stopCh is closed.
 // Shared by both the interactive `serve` command and the system service.
-func runHTTPServer(addr, dir, webuiDir string, stopCh chan struct{}) error {
+func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
 	w, err := wiki.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open wiki: %w", err)
 	}
 	defer w.Close()
 
-	s := mindmcp.NewServer(w)
-
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		return s.MCPServer()
+		return mindmcp.NewServer(w).MCPServer()
 	}, nil)
 
 	mux := http.NewServeMux()
@@ -134,7 +138,12 @@ func runHTTPServer(addr, dir, webuiDir string, stopCh chan struct{}) error {
 
 	// Wrap with panic recovery and request logging
 	handler := logging.RecoverMiddleware(logging.RequestMiddleware(mux))
-	server := &http.Server{Addr: addr, Handler: handler}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       idleTimeout,
+	}
 
 	slog.Info("mind-map server starting",
 		slog.String("addr", addr),

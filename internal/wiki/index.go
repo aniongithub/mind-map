@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,24 +12,28 @@ import (
 )
 
 // Reindex scans the wiki directory and rebuilds the entire index.
-func (w *Wiki) Reindex() error {
+func (w *Wiki) Reindex(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	start := time.Now()
 	pageCount := 0
 
-	tx, err := w.db.Begin()
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	// Clear existing data
-	if _, err := tx.Exec("DELETE FROM links"); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM links"); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM pages"); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM pages"); err != nil {
 		return err
 	}
 
@@ -76,7 +81,7 @@ func (w *Wiki) Reindex() error {
 		metaJSON, _ := json.Marshal(parsed.frontmatter)
 		pageCount++
 
-		_, err = tx.Exec(
+		_, err = tx.ExecContext(ctx,
 			"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
 			pagePath, parsed.title, parsed.body, string(metaJSON), info.ModTime().UTC().Format(time.RFC3339),
 		)
@@ -85,7 +90,7 @@ func (w *Wiki) Reindex() error {
 		}
 
 		for _, target := range parsed.links {
-			_, err = tx.Exec(
+			_, err = tx.ExecContext(ctx,
 				"INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)",
 				pagePath, target,
 			)
@@ -109,7 +114,7 @@ func (w *Wiki) Reindex() error {
 }
 
 // indexPage indexes a single page (after write/update).
-func (w *Wiki) indexPage(pagePath string) error {
+func (w *Wiki) indexPage(ctx context.Context, pagePath string) error {
 	absPath := filepath.Join(w.root, pagePath+".md")
 
 	raw, err := os.ReadFile(absPath)
@@ -129,13 +134,13 @@ func (w *Wiki) indexPage(pagePath string) error {
 
 	metaJSON, _ := json.Marshal(parsed.frontmatter)
 
-	tx, err := w.db.Begin()
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
 		pagePath, parsed.title, parsed.body, string(metaJSON), info.ModTime().UTC().Format(time.RFC3339),
 	)
@@ -144,11 +149,11 @@ func (w *Wiki) indexPage(pagePath string) error {
 	}
 
 	// Rebuild links for this page
-	if _, err := tx.Exec("DELETE FROM links WHERE source = ?", pagePath); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE source = ?", pagePath); err != nil {
 		return err
 	}
 	for _, target := range parsed.links {
-		if _, err := tx.Exec("INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
 			return err
 		}
 	}
@@ -157,17 +162,17 @@ func (w *Wiki) indexPage(pagePath string) error {
 }
 
 // removePageIndex removes a page from the index.
-func (w *Wiki) removePageIndex(pagePath string) error {
-	tx, err := w.db.Begin()
+func (w *Wiki) removePageIndex(ctx context.Context, pagePath string) error {
+	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM pages WHERE path = ?", pagePath); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM pages WHERE path = ?", pagePath); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM links WHERE source = ?", pagePath); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE source = ?", pagePath); err != nil {
 		return err
 	}
 
