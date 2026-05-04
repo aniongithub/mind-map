@@ -7,12 +7,52 @@ mermaid.initialize({ startOnLoad: false, theme: 'default' });
 
 let mermaidCounter = 0;
 
+interface SyncSettings {
+    enabled: boolean;
+    remote: string;
+    interval: string;
+    token: string;
+}
+
+interface Settings {
+    sync: SyncSettings;
+}
+
+async function loadSettings(): Promise<Settings> {
+    const res = await fetch('/api/settings');
+    return res.json();
+}
+
+async function saveSettings(s: Settings): Promise<Settings> {
+    const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(s),
+    });
+    return res.json();
+}
+
+async function getConfigPath(): Promise<string> {
+    const res = await fetch('/api/settings/path');
+    const data = await res.json();
+    return data.path;
+}
+
+async function requestRestart(): Promise<void> {
+    await fetch('/api/restart', { method: 'POST' });
+}
+
 export function App() {
     const [pages, setPages] = useState<Page[]>([]);
     const [current, setCurrent] = useState<Page | null>(null);
     const [editing, setEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
+    const [showSettings, setShowSettings] = useState(false);
+    const [settings, setSettings] = useState<Settings | null>(null);
+    const [configPath, setConfigPath] = useState('');
+    const [settingsDirty, setSettingsDirty] = useState(false);
+    const [settingsSaved, setSettingsSaved] = useState(false);
     const [isDark, setIsDark] = useState(() => {
         const saved = localStorage.getItem('mm-theme');
         if (saved) return saved === 'dark';
@@ -64,6 +104,7 @@ export function App() {
             const page = await mcp.getPage(path);
             setCurrent(page);
             setEditing(false);
+            setShowSettings(false);
         } catch (e) {
             console.error('Failed to open page:', e);
         }
@@ -107,6 +148,52 @@ export function App() {
         } catch (e) {
             console.error('Search failed:', e);
         }
+    };
+
+    const openSettings = async () => {
+        try {
+            const [s, p] = await Promise.all([loadSettings(), getConfigPath()]);
+            setSettings(s);
+            setConfigPath(p);
+            setShowSettings(true);
+            setSettingsDirty(false);
+            setSettingsSaved(false);
+            setCurrent(null);
+        } catch (e) {
+            console.error('Failed to load settings:', e);
+        }
+    };
+
+    const handleSettingsSave = async () => {
+        if (!settings) return;
+        try {
+            const saved = await saveSettings(settings);
+            setSettings(saved);
+            setSettingsDirty(false);
+            setSettingsSaved(true);
+        } catch (e) {
+            console.error('Failed to save settings:', e);
+        }
+    };
+
+    const handleRestart = async () => {
+        try {
+            await requestRestart();
+            // Wait then reload
+            setTimeout(() => window.location.reload(), 2000);
+        } catch (e) {
+            console.error('Restart failed:', e);
+        }
+    };
+
+    const updateSync = (field: keyof SyncSettings, value: string | boolean) => {
+        if (!settings) return;
+        setSettings({
+            ...settings,
+            sync: { ...settings.sync, [field]: value },
+        });
+        setSettingsDirty(true);
+        setSettingsSaved(false);
     };
 
     const renderMarkdown = (body: string): string => {
@@ -181,15 +268,94 @@ export function App() {
                 </ul>
                 <div class="status-bar">
                     <span>{pageCount} pages</span>
-                    <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
-                        {isDark ? '☀' : '☾'}
-                    </button>
+                    <div class="status-bar-left">
+                        <button class="settings-toggle" onClick={openSettings} title="Settings">
+                            &#9881;
+                        </button>
+                        <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
+                            {isDark ? '\u2600' : '\u263E'}
+                        </button>
+                    </div>
                 </div>
             </div>
 
             {/* Main */}
             <div class="main">
-                {current ? (
+                {showSettings && settings ? (
+                    <>
+                        <div class="settings-title">Settings</div>
+                        <div class="settings-container">
+                            {settingsSaved && (
+                                <div class="settings-banner">
+                                    <span>Settings saved. Restart to apply.</span>
+                                    <button class="btn primary" onClick={handleRestart}>Restart now</button>
+                                </div>
+                            )}
+
+                            <div class="settings-section">
+                                <div class="settings-section-title">Wiki Sync</div>
+
+                                <div class="settings-field">
+                                    <div class="settings-field-toggle">
+                                        <input
+                                            type="checkbox"
+                                            id="sync-enabled"
+                                            checked={settings.sync.enabled}
+                                            onChange={(e) => updateSync('enabled', (e.target as HTMLInputElement).checked)}
+                                        />
+                                        <label for="sync-enabled">Enable sync</label>
+                                    </div>
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Remote URL</label>
+                                    <div class="hint">Git remote for sync (e.g. https://github.com/user/repo.wiki.git)</div>
+                                    <input
+                                        type="text"
+                                        value={settings.sync.remote}
+                                        onInput={(e) => updateSync('remote', (e.target as HTMLInputElement).value)}
+                                        placeholder="https://github.com/user/repo.wiki.git"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Sync Interval</label>
+                                    <div class="hint">How often to pull and push (e.g. 30s, 1m, 5m)</div>
+                                    <input
+                                        type="text"
+                                        value={settings.sync.interval}
+                                        onInput={(e) => updateSync('interval', (e.target as HTMLInputElement).value)}
+                                        placeholder="30s"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Auth Token</label>
+                                    <div class="hint">Personal access token for private repos</div>
+                                    <input
+                                        type="password"
+                                        value={settings.sync.token}
+                                        onInput={(e) => updateSync('token', (e.target as HTMLInputElement).value)}
+                                        placeholder="ghp_..."
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="settings-actions">
+                                <button class="btn primary" onClick={handleSettingsSave} disabled={!settingsDirty}>
+                                    Save
+                                </button>
+                                <button class="btn" onClick={() => setShowSettings(false)}>
+                                    Back
+                                </button>
+                            </div>
+
+                            <div class="settings-reset">
+                                To restore defaults, delete <code>{configPath}</code> and restart.
+                            </div>
+                        </div>
+                    </>
+                ) : current ? (
                     <>
                         <div class="page-header">
                             <div class="page-title">{current.title}</div>

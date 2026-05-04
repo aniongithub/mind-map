@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/aniongithub/mind-map/internal/config"
 	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
@@ -109,12 +113,96 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	}
 	defer w.Close()
 
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
+		cfg = config.DefaultConfig()
+	}
+	_ = cfg // will be used by sync goroutine
+
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		return mindmcp.NewServer(w).MCPServer()
 	}, nil)
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sseHandler)
+
+	// Settings API endpoints (UI only, not MCP)
+	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		current, err := config.Load(cfgPath)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(current.Masked())
+	})
+
+	mux.HandleFunc("PUT /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		// Load existing config to preserve token if masked
+		existing, _ := config.Load(cfgPath)
+
+		var incoming config.Config
+		if err := json.Unmarshal(body, &incoming); err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// If the token is masked (unchanged from UI), keep the original
+		if incoming.Sync.Token == "********" {
+			incoming.Sync.Token = existing.Sync.Token
+		}
+
+		if err := config.Save(cfgPath, &incoming); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		slog.Info("settings saved", slog.String("path", cfgPath))
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(incoming.Masked())
+	})
+
+	mux.HandleFunc("POST /api/restart", func(rw http.ResponseWriter, r *http.Request) {
+		slog.Info("restart requested via API")
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(map[string]string{"status": "restarting"})
+
+		// Flush the response before restarting
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+
+		logging.SafeGo("restart", func() {
+			// Give the response time to reach the client
+			time.Sleep(500 * time.Millisecond)
+
+			// Graceful shutdown
+			close(stopCh)
+			time.Sleep(500 * time.Millisecond)
+
+			// Self-exec restart
+			exe, err := os.Executable()
+			if err != nil {
+				slog.Error("restart failed: cannot find executable", slog.Any("error", err))
+				return
+			}
+			slog.Info("restarting", slog.String("exe", exe))
+			syscall.Exec(exe, os.Args, os.Environ())
+		})
+	})
+
+	mux.HandleFunc("GET /api/settings/path", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(map[string]string{"path": cfgPath})
+	})
 
 	var webFS fs.FS
 	if webuiDir != "" {
