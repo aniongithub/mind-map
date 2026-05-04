@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { mcp, Page } from './mcp';
+import { api, Page } from './mcp';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
@@ -67,7 +67,7 @@ export function App() {
     // Load page list
     const loadPages = async () => {
         try {
-            const list = await mcp.listPages();
+            const list = await api.listPages();
             setPages(list);
         } catch (e) {
             console.error('Failed to load pages:', e);
@@ -101,7 +101,7 @@ export function App() {
 
     const openPage = async (path: string) => {
         try {
-            const page = await mcp.getPage(path);
+            const page = await api.getPage(path);
             setCurrent(page);
             setEditing(false);
             setShowSettings(false);
@@ -113,7 +113,7 @@ export function App() {
     const handleSave = async () => {
         if (!current) return;
         try {
-            await mcp.updatePage(current.path, editContent);
+            await api.updatePage(current.path, editContent);
             await openPage(current.path);
             await loadPages();
         } catch (e) {
@@ -143,7 +143,7 @@ export function App() {
             return;
         }
         try {
-            const results = await mcp.searchPages(searchQuery);
+            const results = await api.searchPages(searchQuery);
             setPages(results.map(r => ({ path: r.path, title: r.title, body: '', modified_at: '' })));
         } catch (e) {
             console.error('Search failed:', e);

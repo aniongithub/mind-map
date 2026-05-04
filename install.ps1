@@ -143,7 +143,6 @@ foreach ($dir in $SkillDirs) {
 
 $DefaultPort = "51849"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
-$UseSSE = $false
 $servicePort = $DefaultPort
 
 Write-Host ""
@@ -156,8 +155,6 @@ if ($installService -match '^[Yy]$') {
     $serviceWikiDir = Read-Host "Wiki directory [$DefaultWikiDir]"
     if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
 
-    $UseSSE = $true
-
     # Uninstall existing service if present (handles reinstall)
     $ErrorActionPreference = "Continue"
     & $BinaryPath service stop 2>&1 | Out-Null
@@ -169,8 +166,7 @@ if ($installService -match '^[Yy]$') {
     & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
 
     Write-Host ""
-    Write-Host "  Web UI:       http://localhost:$servicePort" -ForegroundColor Cyan
-    Write-Host "  MCP endpoint: http://localhost:$servicePort/mcp" -ForegroundColor Cyan
+    Write-Host "  Web UI: http://localhost:$servicePort" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
 }
@@ -181,16 +177,8 @@ if ($installService -match '^[Yy]$') {
 
 Write-Step "Configuring MCP clients..."
 
-if ($UseSSE) {
-    $mcpServerEntry = @{
-        type = "sse"
-        url  = "http://localhost:$servicePort/mcp"
-    }
-} else {
-    $mcpServerEntry = @{
-        command = $BinaryPath
-        args    = @("serve", "--stdio")
-    }
+$mcpServerEntry = @{
+    command = $BinaryPath
 }
 
 function Set-McpConfig {
@@ -251,13 +239,12 @@ if (Test-Path "$env:USERPROFILE\.cursor") {
 # ---------------------------------------------------------------------------
 
 Write-Host ""
-if ($UseSSE) {
+if ($installService -match '^[Yy]$') {
     Write-Host "Done! mind-map is running as a service." -ForegroundColor Green
 } else {
     Write-Host "Done! mind-map is ready to use." -ForegroundColor Green
     Write-Host ""
-    Write-Host "  Start the wiki server:  mind-map serve --dir $DefaultWikiDir" -ForegroundColor DarkGray
-    Write-Host "  Start as MCP server:    mind-map serve --stdio" -ForegroundColor DarkGray
+    Write-Host "  Start the web UI:  mind-map serve" -ForegroundColor DarkGray
 }
 Write-Host ""
 Write-Host "To uninstall mind-map completely:" -ForegroundColor DarkGray
