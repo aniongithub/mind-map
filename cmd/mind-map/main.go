@@ -27,31 +27,46 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "mind-map",
 	Short: "A wiki engine with MCP interface for AI agents",
-	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans use the same protocol.",
+	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans use the same protocol.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
+	RunE:  runStdio,
 }
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the mind-map server",
-	Long:  "Starts the MCP server. Use --stdio for single-agent stdio mode, or --addr for HTTP/SSE mode (default).",
+	Short: "Start the HTTP/SSE server with web UI",
+	Long:  "Starts the mind-map server in HTTP/SSE mode with the web UI. Use this for browser access and multi-agent setups.",
 	RunE:  runServe,
 }
 
 func init() {
-	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
+	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
+
 	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
-	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
 	serveCmd.Flags().Bool("run-as-service", false, "Run via kardianos/service (used by service manager)")
 	serveCmd.Flags().MarkHidden("run-as-service")
 	rootCmd.AddCommand(serveCmd)
 }
 
+// runStdio starts the MCP server in stdio mode (default).
+func runStdio(cmd *cobra.Command, args []string) error {
+	dir, _ := cmd.Flags().GetString("dir")
+
+	w, err := wiki.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open wiki: %w", err)
+	}
+	defer w.Close()
+
+	s := mindmcp.NewServer(w, nil)
+	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
+	return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
+}
+
 func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
-	useStdio, _ := cmd.Flags().GetBool("stdio")
 	logFile, _ := cmd.Flags().GetString("log-file")
 	runAsService, _ := cmd.Flags().GetBool("run-as-service")
 
@@ -73,19 +88,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer f.Close()
 	}
 
-	if useStdio {
-		w, err := wiki.Open(dir)
-		if err != nil {
-			return fmt.Errorf("open wiki: %w", err)
-		}
-		defer w.Close()
-
-		s := mindmcp.NewServer(w, nil)
-		slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
-		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
-	}
-
-	// HTTP/SSE mode (interactive)
+	// HTTP/SSE mode
 	addr, _ := cmd.Flags().GetString("addr")
 	webuiDir, _ := cmd.Flags().GetString("webui")
 

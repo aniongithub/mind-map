@@ -1,6 +1,6 @@
 ---
 name: mind-map
-description: A wiki for AI agents and humans — search, read, and write markdown pages with full-text search and wikilinks
+description: A wiki for AI agents and humans -- search, read, and write markdown pages with full-text search and wikilinks
 tools:
   - search_pages
   - get_wiki_context
@@ -10,11 +10,28 @@ tools:
   - delete_page
   - list_pages
   - get_backlinks
+  - register_sync
 ---
 
 # Mind-Map Skill
 
 You have access to `mind-map`, an MCP server that provides a persistent wiki for storing and retrieving knowledge. Pages are plain markdown files with optional YAML frontmatter, indexed with SQLite FTS5 for full-text search. Wikilinks (`[[target]]`) create a navigable knowledge graph with backlinks.
+
+## Connection
+
+mind-map uses **stdio** transport. MCP clients launch it as a subprocess:
+
+```json
+{
+  "mcpServers": {
+    "mind-map": {
+      "command": "mind-map"
+    }
+  }
+}
+```
+
+The wiki directory defaults to `~/.mind-map/wiki`. Override with `--dir` if needed. A web UI is available via `mind-map serve` which starts an HTTP server.
 
 ## When to Use
 
