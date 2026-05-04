@@ -47,7 +47,7 @@
         {
             "label": "waitForServer",
             "type": "shell",
-            "command": "while ! nc -z localhost 51849; do sleep 1; done",
+            "command": "while ! nc -z localhost ${MIND_MAP_PORT}; do sleep 1; done",
             "group": "none",
             "dependsOn": ["build-webui"],
             "problemMatcher": {

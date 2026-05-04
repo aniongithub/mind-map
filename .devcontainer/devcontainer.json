@@ -36,10 +36,13 @@
       }
     }
   },
-  "forwardPorts": [51849],
+  "containerEnv": {
+    "MIND_MAP_PORT": "51888" // This is different from default to prevent clashes with existing mind-map on host
+  },
+  "forwardPorts": [51888],
   "portsAttributes": {
-    "51849": {
-      "label": "mind-map Server",
+    "51888": {
+      "label": "mind-map Server (devcontainer)",
       "onAutoForward": "notify"
     }
   }
