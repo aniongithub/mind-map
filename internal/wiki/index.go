@@ -22,12 +22,10 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 
 	start := time.Now()
 
-	// Phase 1: collect indexed pages (read lock, fast query)
-	w.mu.RLock()
+	// Phase 1: collect indexed pages
 	indexed := make(map[string]string) // path -> modified (RFC3339)
 	rows, err := w.db.QueryContext(ctx, "SELECT path, modified FROM pages")
 	if err != nil {
-		w.mu.RUnlock()
 		return err
 	}
 	for rows.Next() {
@@ -38,7 +36,6 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		indexed[path] = modified
 	}
 	rows.Close()
-	w.mu.RUnlock()
 
 	// Phase 2: walk filesystem without holding any lock
 	diskPages := make(map[string]os.FileInfo)
@@ -72,7 +69,7 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		return err
 	}
 
-	// Phase 3: index new/changed pages (write lock per page)
+	// Phase 3: index new/changed pages
 	var added, updated, removed int
 	for pagePath, info := range diskPages {
 		if err := ctx.Err(); err != nil {
@@ -97,10 +94,8 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		}
 		metaJSON, _ := json.Marshal(parsed.frontmatter)
 
-		w.mu.Lock()
 		tx, err := w.db.BeginTx(ctx, nil)
 		if err != nil {
-			w.mu.Unlock()
 			return err
 		}
 
@@ -110,28 +105,23 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		)
 		if err != nil {
 			tx.Rollback()
-			w.mu.Unlock()
 			return fmt.Errorf("index %s: %w", pagePath, err)
 		}
 
 		if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE source = ?", pagePath); err != nil {
 			tx.Rollback()
-			w.mu.Unlock()
 			return err
 		}
 		for _, target := range parsed.links {
 			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
 				tx.Rollback()
-				w.mu.Unlock()
 				return err
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			w.mu.Unlock()
 			return err
 		}
-		w.mu.Unlock()
 
 		if _, exists := indexed[pagePath]; exists {
 			updated++
@@ -140,16 +130,13 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		}
 	}
 
-	// Phase 4: remove index entries for deleted files (write lock per page)
+	// Phase 4: remove index entries for deleted files
 	for pagePath := range indexed {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if _, onDisk := diskPages[pagePath]; !onDisk {
-			w.mu.Lock()
-			err := w.removePageIndex(ctx, pagePath)
-			w.mu.Unlock()
-			if err != nil {
+			if err := w.removePageIndex(ctx, pagePath); err != nil {
 				slog.Warn("reindex remove error", slog.String("page", pagePath), slog.Any("error", err))
 				continue
 			}

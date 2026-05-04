@@ -17,7 +17,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", ":51849", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", ":${env:MIND_MAP_PORT}", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
             "preLaunchTask": "build-webui"
         },
         {
@@ -26,7 +26,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", ":51849", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", ":${env:MIND_MAP_PORT}", "--dir", "${workspaceFolder}/testdata", "--webui", "${workspaceFolder}/webui/dist"],
         },
         {
             "name": "mind-map (stdio)",
@@ -42,7 +42,7 @@
             "request": "launch",
             "browserLaunchLocation": "ui",
             "runtimeExecutable": "stable",
-            "url": "http://localhost:51849",
+            "url": "http://localhost:${env:MIND_MAP_PORT}",
             "webRoot": "${workspaceFolder}/webui",
             "preLaunchTask": "waitForServer",
             "userDataDir": "${workspaceFolder}/.vscode/cache",

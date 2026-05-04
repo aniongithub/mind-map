@@ -2,17 +2,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/aniongithub/mind-map/internal/config"
 	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
+	mindsync "github.com/aniongithub/mind-map/internal/sync"
 	"github.com/aniongithub/mind-map/webui"
 	"github.com/kardianos/service"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,31 +27,46 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "mind-map",
 	Short: "A wiki engine with MCP interface for AI agents",
-	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans use the same protocol.",
+	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans use the same protocol.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
+	RunE:  runStdio,
 }
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the mind-map server",
-	Long:  "Starts the MCP server. Use --stdio for single-agent stdio mode, or --addr for HTTP/SSE mode (default).",
+	Short: "Start the HTTP/SSE server with web UI",
+	Long:  "Starts the mind-map server in HTTP/SSE mode with the web UI. Use this for browser access and multi-agent setups.",
 	RunE:  runServe,
 }
 
 func init() {
-	serveCmd.Flags().StringP("dir", "d", ".", "Path to the wiki directory")
+	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
+
 	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
-	serveCmd.Flags().Bool("stdio", false, "Run in stdio mode (single agent, for MCP client config)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
 	serveCmd.Flags().Bool("run-as-service", false, "Run via kardianos/service (used by service manager)")
 	serveCmd.Flags().MarkHidden("run-as-service")
 	rootCmd.AddCommand(serveCmd)
 }
 
+// runStdio starts the MCP server in stdio mode (default).
+func runStdio(cmd *cobra.Command, args []string) error {
+	dir, _ := cmd.Flags().GetString("dir")
+
+	w, err := wiki.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open wiki: %w", err)
+	}
+	defer w.Close()
+
+	s := mindmcp.NewServer(w, nil)
+	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
+	return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
+}
+
 func runServe(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
-	useStdio, _ := cmd.Flags().GetBool("stdio")
 	logFile, _ := cmd.Flags().GetString("log-file")
 	runAsService, _ := cmd.Flags().GetBool("run-as-service")
 
@@ -68,19 +88,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer f.Close()
 	}
 
-	if useStdio {
-		w, err := wiki.Open(dir)
-		if err != nil {
-			return fmt.Errorf("open wiki: %w", err)
-		}
-		defer w.Close()
-
-		s := mindmcp.NewServer(w)
-		slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
-		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
-	}
-
-	// HTTP/SSE mode (interactive)
+	// HTTP/SSE mode
 	addr, _ := cmd.Flags().GetString("addr")
 	webuiDir, _ := cmd.Flags().GetString("webui")
 
@@ -109,12 +117,117 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	}
 	defer w.Close()
 
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
+		cfg = config.DefaultConfig()
+	}
+
+	// Start git sync if enabled and configured
+	var gs *mindsync.Manager
+	if cfg.Sync.Enabled {
+		remotes := cfg.Sync.Remotes()
+		if len(remotes) > 0 {
+			gs = mindsync.NewManager(w.Root(), cfgPath, cfg, w)
+			if err := gs.Start(context.Background()); err != nil {
+				slog.Error("failed to start sync", slog.Any("error", err))
+				gs = nil
+			} else {
+				defer gs.Stop()
+			}
+		}
+	}
+
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		return mindmcp.NewServer(w).MCPServer()
+		return mindmcp.NewServer(w, gs).MCPServer()
 	}, nil)
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", sseHandler)
+
+	// Settings API endpoints (UI only, not MCP)
+	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		current, err := config.Load(cfgPath)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(current)
+	})
+
+	mux.HandleFunc("PUT /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		var incoming config.Config
+		if err := json.Unmarshal(body, &incoming); err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Validate: if sync enabled, need at least a default or a mapping
+		if incoming.Sync.Enabled && incoming.Sync.Default == "" && len(incoming.Sync.Mappings) == 0 {
+			http.Error(rw, "sync requires at least a default remote or one mapping", http.StatusBadRequest)
+			return
+		}
+
+		if err := config.Save(cfgPath, &incoming); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		slog.Info("settings saved", slog.String("path", cfgPath))
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(&incoming)
+	})
+
+	mux.HandleFunc("POST /api/restart", func(rw http.ResponseWriter, r *http.Request) {
+		slog.Info("restart requested via API")
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(map[string]string{"status": "restarting"})
+
+		// Flush the response before restarting
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+
+		logging.SafeGo("restart", func() {
+			// Give the response time to reach the client
+			time.Sleep(500 * time.Millisecond)
+
+			// Graceful shutdown
+			close(stopCh)
+			time.Sleep(500 * time.Millisecond)
+
+			// Self-exec restart
+			exe, err := os.Executable()
+			if err != nil {
+				slog.Error("restart failed: cannot find executable", slog.Any("error", err))
+				return
+			}
+			slog.Info("restarting", slog.String("exe", exe))
+			syscall.Exec(exe, os.Args, os.Environ())
+		})
+	})
+
+	mux.HandleFunc("GET /api/settings/path", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(rw).Encode(map[string]string{"path": cfgPath})
+	})
+
+	mux.HandleFunc("GET /api/sync/status", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		if gs != nil {
+			json.NewEncoder(rw).Encode(gs.Status())
+		} else {
+			json.NewEncoder(rw).Encode(mindsync.Status{Enabled: false})
+		}
+	})
 
 	var webFS fs.FS
 	if webuiDir != "" {

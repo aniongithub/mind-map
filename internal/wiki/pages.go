@@ -13,9 +13,6 @@ import (
 
 // GetPage retrieves a single page by path.
 func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -60,9 +57,6 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 
 // ListPages returns all pages, optionally filtered by a prefix path.
 func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -104,12 +98,14 @@ func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 
 // CreatePage creates a new page with the given content.
 func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	if err := w.acquireLock(ctx, pagePath); err != nil {
+		return err
+	}
+	defer w.releaseLock(pagePath)
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -133,12 +129,14 @@ func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) 
 
 // UpdatePage replaces the content of an existing page.
 func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	if err := w.acquireLock(ctx, pagePath); err != nil {
+		return err
+	}
+	defer w.releaseLock(pagePath)
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -156,12 +154,14 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 
 // DeletePage removes a page from the filesystem and index.
 func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	if err := w.acquireLock(ctx, pagePath); err != nil {
+		return err
+	}
+	defer w.releaseLock(pagePath)
 
 	absPath := filepath.Join(w.root, pagePath+".md")
 
@@ -175,9 +175,6 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 
 // Search performs a full-text search across page titles and bodies.
 func (w *Wiki) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -213,9 +210,6 @@ func (w *Wiki) Search(ctx context.Context, query string, limit int) ([]SearchRes
 
 // GetBacklinks returns paths of pages that link to the given page.
 func (w *Wiki) GetBacklinks(ctx context.Context, pagePath string) ([]string, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -225,9 +219,6 @@ func (w *Wiki) GetBacklinks(ctx context.Context, pagePath string) ([]string, err
 
 // Context returns a WikiContext overview.
 func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -268,6 +259,37 @@ func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 		RecentPages:  recent,
 		TopLevelDirs: dirs,
 	}, nil
+}
+
+// --- locking ---
+
+// acquireLock attempts to acquire a page-level lock via SQLite.
+// Returns an error if the page is already locked by another session.
+func (w *Wiki) acquireLock(ctx context.Context, pagePath string) error {
+	_, err := w.db.ExecContext(ctx,
+		"INSERT INTO page_locks (path, holder, acquired) VALUES (?, ?, ?)",
+		pagePath, w.sessionID, time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		// Check if it's our own stale lock
+		var holder string
+		row := w.db.QueryRowContext(ctx, "SELECT holder FROM page_locks WHERE path = ?", pagePath)
+		if row.Scan(&holder) == nil && holder == w.sessionID {
+			// Our own lock, refresh it
+			w.db.ExecContext(ctx,
+				"UPDATE page_locks SET acquired = ? WHERE path = ? AND holder = ?",
+				time.Now().UTC().Format(time.RFC3339), pagePath, w.sessionID,
+			)
+			return nil
+		}
+		return fmt.Errorf("page '%s' is locked by another session", pagePath)
+	}
+	return nil
+}
+
+// releaseLock releases a page-level lock.
+func (w *Wiki) releaseLock(pagePath string) {
+	w.db.Exec("DELETE FROM page_locks WHERE path = ? AND holder = ?", pagePath, w.sessionID)
 }
 
 // --- internal helpers ---

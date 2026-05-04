@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO required)
@@ -53,9 +52,9 @@ type WikiContext struct {
 
 // Wiki is the core engine. Create one with Open().
 type Wiki struct {
-	root string   // absolute path to wiki directory
-	db   *sql.DB  // SQLite database with FTS5
-	mu   sync.RWMutex
+	root      string   // absolute path to wiki directory
+	db        *sql.DB  // SQLite database with FTS5
+	sessionID string   // unique ID for this process, used for page locks
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
@@ -75,9 +74,9 @@ func Open(root string) (*Wiki, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	db.SetMaxOpenConns(1)
 
-	w := &Wiki{root: absRoot, db: db}
+	sessionID := fmt.Sprintf("pid-%d-%d", os.Getpid(), time.Now().UnixNano())
+	w := &Wiki{root: absRoot, db: db, sessionID: sessionID}
 	if err := w.initSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -92,9 +91,10 @@ func Open(root string) (*Wiki, error) {
 	return w, nil
 }
 
-// Close releases the database connection.
+// Close releases page locks held by this session and closes the database.
 func (w *Wiki) Close() error {
 	slog.Info("wiki closing", slog.String("root", w.root))
+	w.db.Exec("DELETE FROM page_locks WHERE holder = ?", w.sessionID)
 	return w.db.Close()
 }
 
@@ -117,6 +117,12 @@ func (w *Wiki) initSchema() error {
 		source TEXT NOT NULL,
 		target TEXT NOT NULL,
 		PRIMARY KEY (source, target)
+	);
+
+	CREATE TABLE IF NOT EXISTS page_locks (
+		path     TEXT PRIMARY KEY,
+		holder   TEXT NOT NULL,
+		acquired TEXT NOT NULL
 	);
 
 	CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
@@ -145,6 +151,12 @@ func (w *Wiki) initSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
 	`
-	_, err := w.db.Exec(schema)
+	if _, err := w.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Clean up stale locks (older than 5 minutes) from crashed processes
+	_, err := w.db.Exec("DELETE FROM page_locks WHERE acquired < ?",
+		time.Now().Add(-5*time.Minute).UTC().Format(time.RFC3339))
 	return err
 }
