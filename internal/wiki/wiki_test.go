@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // testWiki creates a temporary wiki with some test pages.
@@ -248,5 +249,88 @@ func TestContextTopLevelDirs(t *testing.T) {
 	}
 	if !found["projects"] || !found["people"] {
 		t.Errorf("TopLevelDirs = %v, expected projects and people", wctx.TopLevelDirs)
+	}
+}
+
+func TestIncrementalReindex(t *testing.T) {
+	w, dir := testWiki(t)
+	ctx := context.Background()
+
+	// Verify initial state
+	wctx, err := w.Context(ctx)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	if wctx.PageCount != 4 {
+		t.Fatalf("initial PageCount = %d, want 4", wctx.PageCount)
+	}
+
+	// Reindex with no changes -- should be a no-op
+	if err := w.Reindex(ctx); err != nil {
+		t.Fatalf("Reindex (no changes): %v", err)
+	}
+	wctx, _ = w.Context(ctx)
+	if wctx.PageCount != 4 {
+		t.Errorf("PageCount after no-op reindex = %d, want 4", wctx.PageCount)
+	}
+
+	// Add a file externally, then reindex
+	writeFile(t, dir, "new-external.md", "# External\n\nAdded outside the API.\n")
+	if err := w.Reindex(ctx); err != nil {
+		t.Fatalf("Reindex (after add): %v", err)
+	}
+	wctx, _ = w.Context(ctx)
+	if wctx.PageCount != 5 {
+		t.Errorf("PageCount after adding file = %d, want 5", wctx.PageCount)
+	}
+	p, err := w.GetPage(ctx, "new-external")
+	if err != nil {
+		t.Fatalf("GetPage new-external: %v", err)
+	}
+	if p.Title != "External" {
+		t.Errorf("Title = %q, want %q", p.Title, "External")
+	}
+
+	// Delete a file externally, then reindex
+	if err := os.Remove(filepath.Join(dir, "Go.md")); err != nil {
+		t.Fatalf("remove Go.md: %v", err)
+	}
+	if err := w.Reindex(ctx); err != nil {
+		t.Fatalf("Reindex (after delete): %v", err)
+	}
+	wctx, _ = w.Context(ctx)
+	if wctx.PageCount != 4 {
+		t.Errorf("PageCount after deleting file = %d, want 4", wctx.PageCount)
+	}
+	_, err = w.GetPage(ctx, "Go")
+	if err == nil {
+		t.Error("GetPage Go should fail after external delete + reindex")
+	}
+
+	// Modify a file externally, then reindex
+	// Need a small sleep so mtime actually changes (filesystem granularity)
+	modPath := filepath.Join(dir, "index.md")
+	info, _ := os.Stat(modPath)
+	oldMtime := info.ModTime()
+	// Write with a future mtime to guarantee change detection
+	if err := os.WriteFile(modPath, []byte("# Updated Index\n\nNew content with [[new-external]].\n"), 0o644); err != nil {
+		t.Fatalf("write index.md: %v", err)
+	}
+	// Ensure mtime differs from what's in the DB
+	newMtime := oldMtime.Add(2 * time.Second)
+	os.Chtimes(modPath, newMtime, newMtime)
+
+	if err := w.Reindex(ctx); err != nil {
+		t.Fatalf("Reindex (after modify): %v", err)
+	}
+	p, err = w.GetPage(ctx, "index")
+	if err != nil {
+		t.Fatalf("GetPage index: %v", err)
+	}
+	if p.Title != "Updated Index" {
+		t.Errorf("Title after modify = %q, want %q", p.Title, "Updated Index")
+	}
+	if len(p.Links) != 1 || p.Links[0] != "new-external" {
+		t.Errorf("Links after modify = %v, want [new-external]", p.Links)
 	}
 }

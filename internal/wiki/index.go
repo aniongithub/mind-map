@@ -11,39 +11,41 @@ import (
 	"time"
 )
 
-// Reindex scans the wiki directory and rebuilds the entire index.
+// Reindex performs an incremental sync of the filesystem with the index.
+// It only re-indexes pages whose mtime has changed, adds new pages, and
+// removes index entries for deleted files. The lock is held per-page
+// rather than for the entire operation, so the server stays responsive.
 func (w *Wiki) Reindex(ctx context.Context) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	start := time.Now()
-	pageCount := 0
 
-	tx, err := w.db.BeginTx(ctx, nil)
+	// Phase 1: collect indexed pages (read lock, fast query)
+	w.mu.RLock()
+	indexed := make(map[string]string) // path -> modified (RFC3339)
+	rows, err := w.db.QueryContext(ctx, "SELECT path, modified FROM pages")
 	if err != nil {
+		w.mu.RUnlock()
 		return err
 	}
-	defer tx.Rollback()
+	for rows.Next() {
+		var path, modified string
+		if err := rows.Scan(&path, &modified); err != nil {
+			continue
+		}
+		indexed[path] = modified
+	}
+	rows.Close()
+	w.mu.RUnlock()
 
-	// Clear existing data
-	if _, err := tx.ExecContext(ctx, "DELETE FROM links"); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM pages"); err != nil {
-		return err
-	}
-
-	// Walk the filesystem
+	// Phase 2: walk filesystem without holding any lock
+	diskPages := make(map[string]os.FileInfo)
 	err = filepath.WalkDir(w.root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-
-		// Skip hidden dirs and files
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
 			if d.IsDir() {
@@ -51,65 +53,118 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 			}
 			return nil
 		}
-
 		if d.IsDir() || !strings.HasSuffix(name, ".md") {
 			return nil
 		}
-
 		rel, err := filepath.Rel(w.root, path)
 		if err != nil {
 			return err
 		}
-		// Normalize to forward slashes, strip .md extension
 		pagePath := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-
-		parsed := parsePage(raw)
-		if parsed.title == "" {
-			parsed.title = filepath.Base(pagePath)
-		}
-
-		metaJSON, _ := json.Marshal(parsed.frontmatter)
-		pageCount++
-
-		_, err = tx.ExecContext(ctx,
-			"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
-			pagePath, parsed.title, parsed.body, string(metaJSON), info.ModTime().UTC().Format(time.RFC3339),
-		)
-		if err != nil {
-			return fmt.Errorf("index %s: %w", pagePath, err)
-		}
-
-		for _, target := range parsed.links {
-			_, err = tx.ExecContext(ctx,
-				"INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)",
-				pagePath, target,
-			)
-			if err != nil {
-				return fmt.Errorf("index link %s->%s: %w", pagePath, target, err)
-			}
-		}
-
+		diskPages[pagePath] = info
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
+	// Phase 3: index new/changed pages (write lock per page)
+	var added, updated, removed int
+	for pagePath, info := range diskPages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		diskMtime := info.ModTime().UTC().Format(time.RFC3339)
+		if idxMtime, exists := indexed[pagePath]; exists && idxMtime == diskMtime {
+			continue // unchanged
+		}
+
+		absPath := filepath.Join(w.root, pagePath+".md")
+		raw, err := os.ReadFile(absPath)
+		if err != nil {
+			slog.Warn("reindex read error", slog.String("page", pagePath), slog.Any("error", err))
+			continue
+		}
+
+		parsed := parsePage(raw)
+		if parsed.title == "" {
+			parsed.title = filepath.Base(pagePath)
+		}
+		metaJSON, _ := json.Marshal(parsed.frontmatter)
+
+		w.mu.Lock()
+		tx, err := w.db.BeginTx(ctx, nil)
+		if err != nil {
+			w.mu.Unlock()
+			return err
+		}
+
+		_, err = tx.ExecContext(ctx,
+			"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
+			pagePath, parsed.title, parsed.body, string(metaJSON), diskMtime,
+		)
+		if err != nil {
+			tx.Rollback()
+			w.mu.Unlock()
+			return fmt.Errorf("index %s: %w", pagePath, err)
+		}
+
+		if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE source = ?", pagePath); err != nil {
+			tx.Rollback()
+			w.mu.Unlock()
+			return err
+		}
+		for _, target := range parsed.links {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
+				tx.Rollback()
+				w.mu.Unlock()
+				return err
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			w.mu.Unlock()
+			return err
+		}
+		w.mu.Unlock()
+
+		if _, exists := indexed[pagePath]; exists {
+			updated++
+		} else {
+			added++
+		}
 	}
 
-	slog.Info("reindex complete", slog.Int("pages", pageCount), slog.Duration("elapsed", time.Since(start)))
+	// Phase 4: remove index entries for deleted files (write lock per page)
+	for pagePath := range indexed {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, onDisk := diskPages[pagePath]; !onDisk {
+			w.mu.Lock()
+			err := w.removePageIndex(ctx, pagePath)
+			w.mu.Unlock()
+			if err != nil {
+				slog.Warn("reindex remove error", slog.String("page", pagePath), slog.Any("error", err))
+				continue
+			}
+			removed++
+		}
+	}
+
+	slog.Info("reindex complete",
+		slog.Int("total", len(diskPages)),
+		slog.Int("added", added),
+		slog.Int("updated", updated),
+		slog.Int("removed", removed),
+		slog.Int("unchanged", len(diskPages)-added-updated),
+		slog.Duration("elapsed", time.Since(start)),
+	)
 	return nil
 }
 
