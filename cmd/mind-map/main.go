@@ -17,6 +17,7 @@ import (
 	"github.com/aniongithub/mind-map/internal/logging"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
+	mindsync "github.com/aniongithub/mind-map/internal/sync"
 	"github.com/aniongithub/mind-map/webui"
 	"github.com/kardianos/service"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -119,7 +120,28 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
 		cfg = config.DefaultConfig()
 	}
-	_ = cfg // will be used by sync goroutine
+
+	// Start git sync if enabled and configured
+	var gs *mindsync.GitSync
+	if cfg.Sync.Enabled && cfg.Sync.Remote != "" {
+		gs, err = mindsync.New(mindsync.Config{
+			Root:      w.Root(),
+			Remote:    cfg.Sync.Remote,
+			Token:     cfg.Sync.Token,
+			Interval:  cfg.Sync.ParseInterval(),
+			Reindexer: w,
+		})
+		if err != nil {
+			slog.Error("failed to create sync", slog.Any("error", err))
+		} else {
+			if err := gs.Start(context.Background()); err != nil {
+				slog.Error("failed to start sync", slog.Any("error", err))
+				gs = nil
+			} else {
+				defer gs.Stop()
+			}
+		}
+	}
 
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		return mindmcp.NewServer(w).MCPServer()
@@ -158,6 +180,12 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		// If the token is masked (unchanged from UI), keep the original
 		if incoming.Sync.Token == "********" {
 			incoming.Sync.Token = existing.Sync.Token
+		}
+
+		// Validate: if sync enabled, remote is required
+		if incoming.Sync.Enabled && incoming.Sync.Remote == "" {
+			http.Error(rw, "sync remote is required when sync is enabled", http.StatusBadRequest)
+			return
 		}
 
 		if err := config.Save(cfgPath, &incoming); err != nil {
@@ -202,6 +230,15 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	mux.HandleFunc("GET /api/settings/path", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(rw).Encode(map[string]string{"path": cfgPath})
+	})
+
+	mux.HandleFunc("GET /api/sync/status", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		if gs != nil {
+			json.NewEncoder(rw).Encode(gs.Status())
+		} else {
+			json.NewEncoder(rw).Encode(mindsync.Status{Enabled: false})
+		}
 	})
 
 	var webFS fs.FS
