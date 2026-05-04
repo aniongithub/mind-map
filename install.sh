@@ -132,7 +132,6 @@ done
 
 DEFAULT_PORT="51849"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
-USE_SSE=false
 SERVICE_PORT="$DEFAULT_PORT"
 
 echo ""
@@ -147,8 +146,6 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   printf "Wiki directory [${DEFAULT_WIKI_DIR}]: "
   read -r SERVICE_WIKI_DIR < /dev/tty || SERVICE_WIKI_DIR=""
   SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
-
-  USE_SSE=true
 
   # Use the built-in service manager (kardianos/service)
   # System services require elevated privileges on Linux
@@ -167,8 +164,7 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   fi
 
   echo ""
-  echo "  Web UI:       http://localhost:${SERVICE_PORT}"
-  echo "  MCP endpoint: http://localhost:${SERVICE_PORT}/mcp"
+  echo "  Web UI: http://localhost:${SERVICE_PORT}"
   echo ""
   echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"
 fi
@@ -191,11 +187,7 @@ configure_mcp_client() {
   local client_name="$2"
 
   local mcp_entry
-  if [ "$USE_SSE" = true ]; then
-    mcp_entry="{\"type\": \"sse\", \"url\": \"http://localhost:${SERVICE_PORT}/mcp\"}"
-  else
-    mcp_entry="{\"command\": \"${INSTALL_DIR}/mind-map\", \"args\": [\"serve\", \"--stdio\"]}"
-  fi
+  mcp_entry="{\"command\": \"${INSTALL_DIR}/mind-map\"}"
 
   if [ ! -f "$config_file" ]; then
     mkdir -p "$(dirname "$config_file")"
@@ -206,7 +198,7 @@ configure_mcp_client() {
   }
 }
 MCPEOF
-    echo "  ✓ ${client_name} — created ${config_file}"
+    echo "  + ${client_name} -- created ${config_file}"
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c "
 import json
@@ -215,19 +207,13 @@ with open(path) as f:
     data = json.load(f)
 servers = data.setdefault('mcpServers', {})
 entry = json.loads('${mcp_entry}')
-if 'mind-map' not in servers:
-    servers['mind-map'] = entry
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2)
-    print('  ✓ ${client_name} — added to ${config_file}')
-else:
-    servers['mind-map'] = entry
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2)
-    print('  ✓ ${client_name} — updated to $([ "$USE_SSE" = true ] && echo "SSE" || echo "stdio") in ${config_file}')
-" 2>/dev/null || echo "  ⚠ ${client_name} — could not update ${config_file}"
+servers['mind-map'] = entry
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+print('  + ${client_name} -- updated ${config_file}')
+" 2>/dev/null || echo "  ! ${client_name} -- could not update ${config_file}"
   else
-    echo "  ⚠ ${client_name} — exists but python3 not available to merge"
+    echo "  ! ${client_name} -- exists but python3 not available to merge"
   fi
 }
 
@@ -258,13 +244,12 @@ fi
 configure_mcp_client "${HOME}/.claude.json" "Claude Code"
 
 echo ""
-if [ "$USE_SSE" = true ]; then
+if [ "$INSTALL_SERVICE" = "y" ] || [ "$INSTALL_SERVICE" = "Y" ]; then
   echo "Done! mind-map is running as a service."
 else
   echo "Done! mind-map is ready."
   echo ""
-  echo "  Start the wiki server:  mind-map serve --dir ~/.mind-map/wiki"
-  echo "  Start as MCP server:    mind-map serve --stdio --dir ~/.mind-map/wiki"
+  echo "  Start the web UI:  mind-map serve"
 fi
 echo ""
 echo "To uninstall mind-map completely:"

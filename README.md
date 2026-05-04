@@ -4,26 +4,25 @@
 
 **A wiki for AI agents — and humans too.**
 
-`mind-map` is a wiki engine that stores pages as plain markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans connect to the same server using the same protocol. One binary, zero runtime dependencies.
+`mind-map` is a wiki engine that stores pages as plain markdown files, indexes them with SQLite FTS5, and exposes them via MCP (for AI agents) and a REST API with web UI (for humans). One binary, zero runtime dependencies.
 
 ## The Problem
 
 AI agents need persistent, structured memory. Today that means:
 
-- 🔴 **Desktop apps** — tools like Tolaria require Node.js + Rust + WebKit + a display server just to give agents a knowledge base
-- 🔴 **Single-user** — stdio MCP is one agent, one pipe, that's it
-- 🔴 **No web access** — the knowledge is locked in a desktop app only the local user can see
-- 🔴 **Can't deploy headless** — needs a GUI environment even when no human is looking
+- **Desktop apps** -- tools like Tolaria require Node.js + Rust + WebKit + a display server just to give agents a knowledge base
+- **No web access** -- the knowledge is locked in a desktop app only the local user can see
+- **Can't deploy headless** -- needs a GUI environment even when no human is looking
 
 ## The Solution
 
-`mind-map` is a **server**, not an app. It runs anywhere — your laptop, a container or a cloud VM.
+`mind-map` is a **server**, not an app. It runs anywhere -- your laptop, a container or a cloud VM.
 
-1. **One protocol** — MCP over HTTP/SSE. The web UI and AI agents are both MCP clients
-2. **One binary** — Go, statically compiled, `curl | bash` to install
-3. **Plain markdown** — pages are `.md` files with YAML frontmatter. Git-friendly, portable, yours
-4. **Multi-agent** — HTTP/SSE means any number of agents can connect simultaneously
-5. **Built-in web UI** — browse, search, and edit the wiki from any browser
+1. **Agents use stdio** -- `mind-map` with no args starts an MCP server on stdin/stdout
+2. **Humans use the web UI** -- `mind-map serve` starts an HTTP server with REST API and browser UI
+3. **One binary** -- Go, statically compiled, `curl | bash` to install
+4. **Plain markdown** -- pages are `.md` files with YAML frontmatter. Git-friendly, portable, yours
+5. **Multi-process safe** -- SQLite page locking lets multiple agents share the same wiki directory
 
 ```
 Agent: "What do we know about authentication?"
@@ -52,28 +51,31 @@ Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-
 
 ```mermaid
 graph TD
-    A[Preact Web App] -->|MCP over HTTP/SSE| B
-    C[AI Agent] -->|MCP over HTTP/SSE| B
-    D[AI Agent] -->|MCP over stdio| B
+    A[Preact Web App] -->|REST API| B
+    C[AI Agent] -->|MCP stdio| D
 
     subgraph "mind-map serve"
-        B[MCP Server] --> E[Wiki Engine]
-        E --> F[SQLite FTS5]
+        B[HTTP Server] --> E[Wiki Engine]
     end
 
+    subgraph "mind-map (stdio)"
+        D[MCP Server] --> E
+    end
+
+    E --> F[SQLite FTS5]
     E -->|read/write| G[Markdown Files]
 ```
 
-The web UI is a static Preact app served from the same binary. It connects to the MCP SSE endpoint at `/mcp` — the same endpoint AI agents use. There is no separate REST API.
+The web UI is a static Preact app served by `mind-map serve`. It uses a REST API to read and write pages. AI agents use stdio MCP -- each agent launches its own `mind-map` process.
 
-## Two Modes, One Server
+## Two Modes
 
 | Mode | Command | Use case |
 |------|---------|----------|
-| **HTTP/SSE** (default) | `mind-map serve --dir ~/.mind-map/wiki` | Web UI + multiple agents |
-| **stdio** | `mind-map serve --stdio --dir ~/.mind-map/wiki` | Single agent (Copilot, Claude Desktop, Cursor) |
+| **stdio** (default) | `mind-map` | AI agents (Copilot, Claude, Cursor) |
+| **HTTP** | `mind-map serve` | Web UI for humans |
 
-Both modes use the same wiki engine, same MCP tools, same code path. The only difference is the transport.
+Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wiki` by default). Multiple stdio processes can safely share the same wiki via SQLite page locking.
 
 ## MCP Tools (8 total)
 
@@ -88,13 +90,16 @@ Both modes use the same wiki engine, same MCP tools, same code path. The only di
 | `list_pages` | List pages, optionally filtered by path prefix |
 | `get_backlinks` | Get all pages that link to a given page |
 
+| `register_sync` | Register a wiki path prefix to sync with a git remote |
+
 ## Wiki Features
 
-- **YAML frontmatter** — structured metadata on every page (`title`, `type`, `status`, custom fields)
-- **Wikilinks** — `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
-- **Backlink index** — every page knows what links to it
-- **Full-text search** — SQLite FTS5 with ranked results and snippets
-- **Concurrent access** — `sync.RWMutex` for safe multi-agent reads and writes
+- **YAML frontmatter** -- structured metadata on every page (`title`, `type`, `status`, custom fields)
+- **Wikilinks** -- `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
+- **Backlink index** -- every page knows what links to it
+- **Full-text search** -- SQLite FTS5 with ranked results and snippets
+- **Multi-process safe** -- SQLite page locking for concurrent agent access
+- **Git sync** -- sync wiki pages to GitHub repo wikis via configurable mappings
 
 ## Web UI
 
@@ -106,35 +111,21 @@ The built-in web UI is a metro-inspired, chromeless Preact app:
 - Edit mode with raw markdown editor
 - Dark / light theme toggle
 
-The web UI speaks MCP — it's an MCP client, not a separate interface. If an agent creates a page, it appears in the browser. If you edit in the browser, the agent sees the change.
+The web UI speaks the same language as the wiki engine. If an agent creates a page via stdio, it appears in the browser. If you edit in the browser, the agent sees the change on its next read.
 
-## MCP Server Configuration
-
-### Linux / macOS (stdio)
+## MCP Client Configuration
 
 ```json
 {
   "mcpServers": {
     "mind-map": {
-      "command": "mind-map",
-      "args": ["serve", "--stdio", "--dir", "~/.mind-map/wiki"]
+      "command": "mind-map"
     }
   }
 }
 ```
 
-### Windows
-
-```json
-{
-  "mcpServers": {
-    "mind-map": {
-      "command": "mind-map",
-      "args": ["serve", "--stdio"]
-    }
-  }
-}
-```
+That's it. No args needed -- stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
 
 ## Page Format
 
