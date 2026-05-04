@@ -119,9 +119,8 @@
           <p>Existing agent memory tools require:</p>
           <ul>
             <li><span class="icon-bad">✗</span> Desktop apps with Node.js + Rust + WebKit</li>
-            <li><span class="icon-bad">✗</span> A display server — can't run headless</li>
-            <li><span class="icon-bad">✗</span> stdio transport — single agent only</li>
-            <li><span class="icon-bad">✗</span> No web access — knowledge locked on one machine</li>
+            <li><span class="icon-bad">✗</span> A display server -- can't run headless</li>
+            <li><span class="icon-bad">✗</span> No web access -- knowledge locked on one machine</li>
             <li><span class="icon-bad">✗</span> Pages of install instructions</li>
           </ul>
         </div>
@@ -131,8 +130,9 @@
           <ul>
             <li><span class="icon-good">✓</span> Single binary, zero runtime deps</li>
             <li><span class="icon-good">✓</span> Headless or with built-in web UI</li>
-            <li><span class="icon-good">✓</span> HTTP/SSE — multiple agents connect at once</li>
+            <li><span class="icon-good">✓</span> Multiple agents via stdio -- no service required</li>
             <li><span class="icon-good">✓</span> Browse and edit from any browser</li>
+            <li><span class="icon-good">✓</span> Git sync to GitHub repo wikis</li>
             <li><span class="icon-good">✓</span> <code>curl | bash</code> and you're done</li>
           </ul>
         </div>
@@ -144,7 +144,7 @@
   <section class="section section-dark" id="how">
     <div class="section-inner">
       <h2 class="section-title">How it works</h2>
-      <p class="section-sub">One protocol. One server. Two kinds of clients. Edit in the browser — agents see the change instantly.</p>
+      <p class="section-sub">One protocol. One server. Two kinds of clients. Edit in the browser -- agents see the change instantly.</p>
       <div class="demo-container">
         <img src="screengrabs/mind-map-save-edit-retrieve.gif" alt="Agent saving a preference, editing it, then recalling the changed answer" class="demo-gif" />
       </div>
@@ -154,24 +154,24 @@
   <!-- Architecture -->
   <section class="section">
     <div class="section-inner">
-      <h2 class="section-title">One protocol, everywhere</h2>
-      <p class="section-sub">The web UI is an MCP client — same as the AI agents. No separate REST API to maintain.</p>
+      <h2 class="section-title">Two interfaces, one wiki</h2>
+      <p class="section-sub">Agents use stdio MCP. Humans use the web UI. Both read and write the same markdown files.</p>
       <div class="arch-diagram">
         <div class="arch-row arch-clients">
           <div class="arch-box arch-client">
             <div class="arch-box-icon">🌐</div>
             <strong>Web UI</strong>
-            <span>Preact app</span>
+            <span>REST API</span>
           </div>
           <div class="arch-box arch-client">
             <div class="arch-box-icon">🤖</div>
             <strong>AI Agent</strong>
-            <span>Copilot / Claude / Cursor</span>
+            <span>MCP stdio</span>
           </div>
           <div class="arch-box arch-client">
             <div class="arch-box-icon">🤖</div>
             <strong>AI Agent</strong>
-            <span>Another agent</span>
+            <span>MCP stdio</span>
           </div>
         </div>
         <div class="arch-arrow">
@@ -180,13 +180,13 @@
             <line x1="12" y1="6" x2="12" y2="42" stroke="#64748b" stroke-width="2"/>
             <polygon points="6,40 12,48 18,40" fill="#64748b"/>
           </svg>
-          <span class="arch-arrow-label">MCP over HTTP/SSE</span>
+          <span class="arch-arrow-label">REST / stdio</span>
         </div>
         <div class="arch-row">
           <div class="arch-box arch-server">
             <div class="arch-box-icon">⚙️</div>
-            <strong>mind-map serve</strong>
-            <span>Go binary · Wiki engine · SQLite FTS5</span>
+            <strong>mind-map</strong>
+            <span>Go binary · Wiki engine · SQLite FTS5 · Page locking</span>
           </div>
         </div>
         <div class="arch-arrow">
@@ -245,11 +245,11 @@
         </div>
         <div class="card">
           <h3>🐳 Container / Cloud</h3>
-          <p>Single static binary. Run in Docker, Kubernetes, a cloud VM, or as a sidecar. Agents connect over the network.</p>
+          <p>Single static binary. Run in Docker, Kubernetes, a cloud VM, or as a sidecar. Multiple agents share the wiki safely via SQLite page locking.</p>
         </div>
         <div class="card">
           <h3>📂 Per-repository memory</h3>
-          <p>Drop a wiki alongside your code. Agents build up project knowledge that persists across sessions and team members.</p>
+          <p>Agents map wiki prefixes to GitHub repo wikis with <code>register_sync</code>. Knowledge syncs automatically via git.</p>
         </div>
       </div>
     </div>
@@ -258,7 +258,7 @@
   <!-- Tools -->
   <section class="section section-dark" id="tools">
     <div class="section-inner">
-      <h2 class="section-title">8 MCP tools</h2>
+      <h2 class="section-title">9 MCP tools</h2>
       <p class="section-sub">Everything an agent needs to use the wiki as persistent memory.</p>
       <div class="tools-list">
         <div class="tool-group-wide">
@@ -271,6 +271,7 @@
             <li><strong>delete_page</strong> <span>Remove a page from the wiki and search index</span></li>
             <li><strong>list_pages</strong> <span>List pages, optionally filtered by path prefix</span></li>
             <li><strong>get_backlinks</strong> <span>Get all pages that link to a given page</span></li>
+            <li><strong>register_sync</strong> <span>Map a wiki prefix to a git remote for sync</span></li>
           </ul>
         </div>
       </div>
