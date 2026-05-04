@@ -81,7 +81,7 @@ func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration) *servi
 	cfg := &service.Config{
 		Name:        "mind-map",
 		DisplayName: "mind-map",
-		Description: "mind-map wiki server — MCP over HTTP/SSE",
+		Description: "mind-map wiki server",
 		Arguments:   args,
 		Executable:  execPath,
 	}

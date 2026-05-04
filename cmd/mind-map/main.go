@@ -20,28 +20,28 @@ import (
 	mindsync "github.com/aniongithub/mind-map/internal/sync"
 	"github.com/aniongithub/mind-map/webui"
 	"github.com/kardianos/service"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "mind-map",
 	Short: "A wiki engine with MCP interface for AI agents",
-	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP over HTTP/SSE. AI agents and humans use the same protocol.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
+	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP (stdio) or a REST API (serve). Agents use stdio, humans use the web UI.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
 	RunE:  runStdio,
 }
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the HTTP/SSE server with web UI",
-	Long:  "Starts the mind-map server in HTTP/SSE mode with the web UI. Use this for browser access and multi-agent setups.",
+	Short: "Start the HTTP server with web UI",
+	Long:  "Starts the mind-map HTTP server with REST API and web UI.",
 	RunE:  runServe,
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 
-	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on (HTTP/SSE mode)")
+	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
@@ -62,7 +62,7 @@ func runStdio(cmd *cobra.Command, args []string) error {
 
 	s := mindmcp.NewServer(w, nil)
 	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
-	return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
+	return s.MCPServer().Run(cmd.Context(), &mcpsdk.StdioTransport{})
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -88,7 +88,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer f.Close()
 	}
 
-	// HTTP/SSE mode
+	// HTTP mode
 	addr, _ := cmd.Flags().GetString("addr")
 	webuiDir, _ := cmd.Flags().GetString("webui")
 
@@ -108,7 +108,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return runHTTPServer(addr, dir, webuiDir, idleTimeout, stopCh)
 }
 
-// runHTTPServer starts the HTTP/SSE server and blocks until stopCh is closed.
+// runHTTPServer starts the HTTP server and blocks until stopCh is closed.
 // Shared by both the interactive `serve` command and the system service.
 func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
 	w, err := wiki.Open(dir)
@@ -139,12 +139,107 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		}
 	}
 
-	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		return mindmcp.NewServer(w, gs).MCPServer()
-	}, nil)
-
+	// REST API for wiki operations (used by web UI)
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", sseHandler)
+
+	mux.HandleFunc("GET /api/context", func(rw http.ResponseWriter, r *http.Request) {
+		wctx, err := w.Context(r.Context())
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(rw, wctx)
+	})
+
+	mux.HandleFunc("GET /api/pages", func(rw http.ResponseWriter, r *http.Request) {
+		prefix := r.URL.Query().Get("prefix")
+		pages, err := w.ListPages(r.Context(), prefix)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(rw, pages)
+	})
+
+	mux.HandleFunc("GET /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
+		pagePath := r.PathValue("path")
+		page, err := w.GetPage(r.Context(), pagePath)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(rw, page)
+	})
+
+	mux.HandleFunc("POST /api/pages", func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Path == "" || req.Content == "" {
+			http.Error(rw, "path and content are required", http.StatusBadRequest)
+			return
+		}
+		if err := w.CreatePage(r.Context(), req.Path, req.Content); err != nil {
+			http.Error(rw, err.Error(), http.StatusConflict)
+			return
+		}
+		rw.WriteHeader(http.StatusCreated)
+		jsonResponse(rw, map[string]string{"status": "created", "path": req.Path})
+	})
+
+	mux.HandleFunc("PUT /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
+		pagePath := r.PathValue("path")
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := w.UpdatePage(r.Context(), pagePath, req.Content); err != nil {
+			http.Error(rw, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(rw, map[string]string{"status": "updated", "path": pagePath})
+	})
+
+	mux.HandleFunc("DELETE /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
+		pagePath := r.PathValue("path")
+		if err := w.DeletePage(r.Context(), pagePath); err != nil {
+			http.Error(rw, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(rw, map[string]string{"status": "deleted", "path": pagePath})
+	})
+
+	mux.HandleFunc("GET /api/search", func(rw http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if q == "" {
+			http.Error(rw, "q parameter is required", http.StatusBadRequest)
+			return
+		}
+		results, err := w.Search(r.Context(), q, 20)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(rw, results)
+	})
+
+	mux.HandleFunc("GET /api/backlinks/{path...}", func(rw http.ResponseWriter, r *http.Request) {
+		pagePath := r.PathValue("path")
+		backlinks, err := w.GetBacklinks(r.Context(), pagePath)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(rw, backlinks)
+	})
 
 	// Settings API endpoints (UI only, not MCP)
 	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
@@ -261,7 +356,7 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	slog.Info("mind-map server starting",
 		slog.String("addr", addr),
 		slog.String("wiki", w.Root()),
-		slog.String("mcp_endpoint", "http://localhost"+addr+"/mcp"),
+		slog.String("url", "http://localhost"+addr),
 	)
 
 	go func() {
@@ -276,6 +371,11 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	}
 	slog.Info("server stopped")
 	return nil
+}
+
+func jsonResponse(rw http.ResponseWriter, v any) {
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(v)
 }
 
 func main() {
