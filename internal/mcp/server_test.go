@@ -48,7 +48,7 @@ A programming language.
 	}
 	t.Cleanup(func() { w.Close() })
 
-	s := NewServer(w)
+	s := NewServer(w, nil)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
 	ct, st := mcp.NewInMemoryTransports()

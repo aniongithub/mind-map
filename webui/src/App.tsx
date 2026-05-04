@@ -9,9 +9,9 @@ let mermaidCounter = 0;
 
 interface SyncSettings {
     enabled: boolean;
-    remote: string;
+    default: string;
     interval: string;
-    token: string;
+    mappings?: { prefix: string; remote: string }[];
 }
 
 interface Settings {
@@ -308,13 +308,13 @@ export function App() {
                                 </div>
 
                                 <div class="settings-field">
-                                    <label>Remote URL</label>
-                                    <div class="hint">Git remote for sync (e.g. https://github.com/user/repo.wiki.git)</div>
+                                    <label>Default Remote</label>
+                                    <div class="hint">Catch-all git remote for pages without a specific mapping</div>
                                     <input
                                         type="text"
-                                        value={settings.sync.remote}
-                                        onInput={(e) => updateSync('remote', (e.target as HTMLInputElement).value)}
-                                        placeholder="https://github.com/user/repo.wiki.git"
+                                        value={settings.sync.default}
+                                        onInput={(e) => updateSync('default', (e.target as HTMLInputElement).value)}
+                                        placeholder="https://github.com/user/wiki.wiki.git"
                                     />
                                 </div>
 
@@ -329,16 +329,19 @@ export function App() {
                                     />
                                 </div>
 
-                                <div class="settings-field">
-                                    <label>Auth Token</label>
-                                    <div class="hint">Personal access token for private repos</div>
-                                    <input
-                                        type="password"
-                                        value={settings.sync.token}
-                                        onInput={(e) => updateSync('token', (e.target as HTMLInputElement).value)}
-                                        placeholder="ghp_..."
-                                    />
-                                </div>
+                                {settings.sync.mappings && settings.sync.mappings.length > 0 && (
+                                    <div class="settings-field">
+                                        <label>Active Mappings</label>
+                                        <div class="hint">Registered by agents via register_sync</div>
+                                        <div class="settings-mappings">
+                                            {settings.sync.mappings.map(m => (
+                                                <div key={m.prefix} class="settings-mapping">
+                                                    <code>{m.prefix}</code> &rarr; <code>{m.remote}</code>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div class="settings-actions">

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aniongithub/mind-map/internal/config"
 )
 
 // mockReindexer records reindex calls.
@@ -53,64 +55,23 @@ func seedRemote(t *testing.T, remotePath string) {
 	run("push", "-u", "origin", "main")
 }
 
-func TestNewValidation(t *testing.T) {
-	_, err := New(Config{Root: "/tmp", Remote: ""})
-	if err == nil {
-		t.Error("expected error for empty remote")
+func TestSanitizeDirName(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"https://github.com/user/repo.wiki.git", "github.com_user_repo.wiki"},
+		{"git@github.com:user/repo.wiki.git", "github.com_user_repo.wiki"},
+		{"https://github.com/org/project.wiki.git", "github.com_org_project.wiki"},
 	}
-
-	_, err = New(Config{Root: "", Remote: "https://example.com/repo.git"})
-	if err == nil {
-		t.Error("expected error for empty root")
-	}
-}
-
-func TestAuthRemote(t *testing.T) {
-	// No token -- return as-is
-	g := &GitSync{remote: "https://github.com/user/repo.wiki.git"}
-	if got := g.authRemote(); got != g.remote {
-		t.Errorf("no token: got %q, want %q", got, g.remote)
-	}
-
-	// With token -- inject into HTTPS
-	g.token = "ghp_abc123"
-	got := g.authRemote()
-	if !strings.Contains(got, "x-access-token:ghp_abc123@") {
-		t.Errorf("with token: got %q, expected token injection", got)
-	}
-
-	// SSH remote -- don't inject
-	g.remote = "git@github.com:user/repo.wiki.git"
-	got = g.authRemote()
-	if got != g.remote {
-		t.Errorf("ssh remote: got %q, want unchanged", got)
+	for _, tt := range tests {
+		got := sanitizeDirName(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeDirName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }
 
-func TestEnsureGitignore(t *testing.T) {
-	dir := t.TempDir()
-	g := &GitSync{root: dir}
-	g.ensureGitignore()
-
-	content, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if err != nil {
-		t.Fatalf("read .gitignore: %v", err)
-	}
-	if !strings.Contains(string(content), ".mind-map.db") {
-		t.Error(".gitignore should contain .mind-map.db")
-	}
-
-	// Should not overwrite existing
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("custom\n"), 0o644)
-	g.ensureGitignore()
-	content, _ = os.ReadFile(filepath.Join(dir, ".gitignore"))
-	if string(content) != "custom\n" {
-		t.Error("should not overwrite existing .gitignore")
-	}
-}
-
-func TestSyncWithLocalRemote(t *testing.T) {
-	// Skip if git is not available
+func TestManagerSyncWithLocalRemote(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
@@ -121,41 +82,23 @@ func TestSyncWithLocalRemote(t *testing.T) {
 	wikiDir := t.TempDir()
 	reindexer := &mockReindexer{}
 
-	g, err := New(Config{
-		Root:      wikiDir,
-		Remote:    remotePath,
-		Interval:  5 * time.Second,
-		Reindexer: reindexer,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "5s"
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, reindexer)
 
 	ctx := context.Background()
-
-	// Configure git user for commits
-	gitConfig := func(key, value string) {
-		cmd := exec.Command("git", "config", key, value)
-		cmd.Dir = wikiDir
-		cmd.Run()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
+	defer mgr.Stop()
 
-	if err := g.ensureGitRepo(ctx); err != nil {
-		t.Fatalf("ensureGitRepo: %v", err)
-	}
-
-	gitConfig("user.email", "test@test.com")
-	gitConfig("user.name", "Test")
-
-	// Run a sync cycle
-	g.syncOnce(ctx)
-
-	status := g.Status()
-	if status.LastError != "" {
-		t.Fatalf("first sync error: %s", status.LastError)
-	}
-
-	// index.md should have been pulled from remote
+	// Initial sync should have pulled index.md
 	content, err := os.ReadFile(filepath.Join(wikiDir, "index.md"))
 	if err != nil {
 		t.Fatalf("read index.md: %v", err)
@@ -164,33 +107,126 @@ func TestSyncWithLocalRemote(t *testing.T) {
 		t.Errorf("index.md content = %q, expected 'Welcome'", content)
 	}
 
-	// Reindexer should have been called
 	if reindexer.calls == 0 {
 		t.Error("reindexer was not called")
 	}
 
-	// Create a new local page and sync again
+	// Create a local page and trigger sync
 	os.WriteFile(filepath.Join(wikiDir, "notes.md"), []byte("# Notes\n\nSome notes.\n"), 0o644)
-	g.syncOnce(ctx)
+	mgr.syncAll(ctx)
 
-	status = g.Status()
-	if status.LastError != "" {
-		t.Fatalf("second sync error: %s", status.LastError)
-	}
-
-	// Verify the page was pushed to remote by cloning into a third dir
+	// Verify pushed to remote
 	cloneTarget := filepath.Join(t.TempDir(), "clone")
 	cmd := exec.Command("git", "clone", remotePath, cloneTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("clone for verify: %s: %v", out, err)
+		t.Fatalf("clone: %s: %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(cloneTarget, "notes.md")); err != nil {
-		entries, _ := os.ReadDir(cloneTarget)
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Errorf("notes.md was not pushed to remote. Clone contains: %v", names)
+		t.Error("notes.md was not pushed to remote")
+	}
+}
+
+func TestManagerMultiRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remote1 := setupBareRemote(t)
+	remote2 := setupBareRemote(t)
+
+	wikiDir := t.TempDir()
+
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Interval = "5s"
+	cfg.Sync.AddMapping("projects/alpha", remote1)
+	cfg.Sync.AddMapping("projects/beta", remote2)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+
+	ctx := context.Background()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Create pages under different prefixes
+	os.MkdirAll(filepath.Join(wikiDir, "projects/alpha"), 0o755)
+	os.MkdirAll(filepath.Join(wikiDir, "projects/beta"), 0o755)
+	os.WriteFile(filepath.Join(wikiDir, "projects/alpha/design.md"), []byte("# Alpha Design\n"), 0o644)
+	os.WriteFile(filepath.Join(wikiDir, "projects/beta/readme.md"), []byte("# Beta Readme\n"), 0o644)
+
+	mgr.syncAll(ctx)
+
+	// Verify alpha's page went to remote1
+	clone1 := filepath.Join(t.TempDir(), "clone1")
+	exec.Command("git", "clone", remote1, clone1).CombinedOutput()
+	if _, err := os.Stat(filepath.Join(clone1, "design.md")); err != nil {
+		t.Error("design.md not pushed to remote1")
+	}
+	// alpha should NOT have beta's page
+	if _, err := os.Stat(filepath.Join(clone1, "readme.md")); err == nil {
+		t.Error("readme.md should not be in remote1")
+	}
+
+	// Verify beta's page went to remote2
+	clone2 := filepath.Join(t.TempDir(), "clone2")
+	exec.Command("git", "clone", remote2, clone2).CombinedOutput()
+	if _, err := os.Stat(filepath.Join(clone2, "readme.md")); err != nil {
+		t.Error("readme.md not pushed to remote2")
+	}
+}
+
+func TestRegisterMapping(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	wikiDir := t.TempDir()
+	remote := setupBareRemote(t)
+
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+
+	// Register dynamically
+	if err := mgr.RegisterMapping("projects/new", remote); err != nil {
+		t.Fatalf("RegisterMapping: %v", err)
+	}
+
+	// Verify persisted to config
+	loaded, _ := config.Load(cfgPath)
+	if len(loaded.Sync.Mappings) != 1 {
+		t.Fatalf("expected 1 mapping, got %d", len(loaded.Sync.Mappings))
+	}
+	if loaded.Sync.Mappings[0].Prefix != "projects/new" {
+		t.Errorf("prefix = %q", loaded.Sync.Mappings[0].Prefix)
+	}
+
+	// HasMapping should work
+	if !mgr.HasMapping("projects/new/design") {
+		t.Error("HasMapping should be true for projects/new/design")
+	}
+	if mgr.HasMapping("projects/other") {
+		t.Error("HasMapping should be false for projects/other (no default)")
+	}
+}
+
+func TestHasMappingWithDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Sync.Default = "https://github.com/user/wiki.wiki.git"
+
+	mgr := NewManager("/tmp", "/tmp/cfg.json", cfg, nil)
+
+	// Everything matches when there's a default
+	if !mgr.HasMapping("anything/at/all") {
+		t.Error("HasMapping should be true when default is set")
 	}
 }
 
@@ -199,41 +235,28 @@ func TestStartAndStop(t *testing.T) {
 		t.Skip("git not found")
 	}
 
-	remotePath := setupBareRemote(t)
+	remote := setupBareRemote(t)
 	wikiDir := t.TempDir()
 
-	g, err := New(Config{
-		Root:      wikiDir,
-		Remote:    remotePath,
-		Interval:  100 * time.Millisecond,
-		Reindexer: &mockReindexer{},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remote
+	cfg.Sync.Interval = "100ms"
 
-	// Configure git user
-	ctx := context.Background()
-	g.ensureGitRepo(ctx)
-	cmd := exec.Command("git", "config", "user.email", "test@test.com")
-	cmd.Dir = wikiDir
-	cmd.Run()
-	cmd = exec.Command("git", "config", "user.name", "Test")
-	cmd.Dir = wikiDir
-	cmd.Run()
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
 
-	if err := g.Start(ctx); err != nil {
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+
+	if err := mgr.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Let it run a couple cycles
 	time.Sleep(350 * time.Millisecond)
+	mgr.Stop()
 
-	g.Stop()
-
-	status := g.Status()
-	if !status.LastSync.IsZero() {
-		// It synced at least once
-		t.Logf("last sync: %v", status.LastSync)
+	status := mgr.Status()
+	if !status.Enabled {
+		t.Error("status should show enabled")
 	}
 }

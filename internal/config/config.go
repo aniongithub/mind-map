@@ -8,15 +8,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
+// SyncMapping maps a wiki path prefix to a git remote.
+type SyncMapping struct {
+	Prefix string `json:"prefix"`
+	Remote string `json:"remote"`
+}
+
 // SyncConfig holds git sync settings.
 type SyncConfig struct {
-	Enabled  bool   `json:"enabled"`
-	Remote   string `json:"remote"`
-	Interval string `json:"interval"`
-	Token    string `json:"token,omitempty"`
+	Enabled  bool          `json:"enabled"`
+	Default  string        `json:"default"`
+	Interval string        `json:"interval"`
+	Mappings []SyncMapping `json:"mappings,omitempty"`
 }
 
 // ParseInterval returns the sync interval as a time.Duration.
@@ -32,6 +39,52 @@ func (s *SyncConfig) ParseInterval() time.Duration {
 	return d
 }
 
+// ResolveRemote returns the git remote for a given page path.
+// It checks mappings (longest prefix match) then falls back to the default.
+// Returns empty string if no remote matches.
+func (s *SyncConfig) ResolveRemote(pagePath string) string {
+	bestPrefix := ""
+	bestRemote := ""
+	for _, m := range s.Mappings {
+		if (pagePath == m.Prefix || strings.HasPrefix(pagePath, m.Prefix+"/")) && len(m.Prefix) > len(bestPrefix) {
+			bestPrefix = m.Prefix
+			bestRemote = m.Remote
+		}
+	}
+	if bestRemote != "" {
+		return bestRemote
+	}
+	return s.Default
+}
+
+// AddMapping adds or updates a prefix-to-remote mapping.
+func (s *SyncConfig) AddMapping(prefix, remote string) {
+	for i, m := range s.Mappings {
+		if m.Prefix == prefix {
+			s.Mappings[i].Remote = remote
+			return
+		}
+	}
+	s.Mappings = append(s.Mappings, SyncMapping{Prefix: prefix, Remote: remote})
+}
+
+// Remotes returns all unique remotes (default + mappings).
+func (s *SyncConfig) Remotes() []string {
+	seen := make(map[string]bool)
+	var remotes []string
+	if s.Default != "" {
+		seen[s.Default] = true
+		remotes = append(remotes, s.Default)
+	}
+	for _, m := range s.Mappings {
+		if m.Remote != "" && !seen[m.Remote] {
+			seen[m.Remote] = true
+			remotes = append(remotes, m.Remote)
+		}
+	}
+	return remotes
+}
+
 // Config holds all runtime settings.
 type Config struct {
 	Sync SyncConfig `json:"sync"`
@@ -42,9 +95,8 @@ func DefaultConfig() *Config {
 	return &Config{
 		Sync: SyncConfig{
 			Enabled:  false,
-			Remote:   "",
+			Default:  "",
 			Interval: "30s",
-			Token:    "",
 		},
 	}
 }
@@ -91,15 +143,4 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
-}
-
-// Masked returns a copy of the config with sensitive fields redacted
-// for API responses.
-func (c *Config) Masked() *Config {
-	cp := *c
-	cp.Sync = c.Sync
-	if cp.Sync.Token != "" {
-		cp.Sync.Token = "********"
-	}
-	return &cp
 }

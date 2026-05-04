@@ -80,7 +80,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 		defer w.Close()
 
-		s := mindmcp.NewServer(w)
+		s := mindmcp.NewServer(w, nil)
 		slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 		return s.MCPServer().Run(cmd.Context(), &mcp.StdioTransport{})
 	}
@@ -122,18 +122,11 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	}
 
 	// Start git sync if enabled and configured
-	var gs *mindsync.GitSync
-	if cfg.Sync.Enabled && cfg.Sync.Remote != "" {
-		gs, err = mindsync.New(mindsync.Config{
-			Root:      w.Root(),
-			Remote:    cfg.Sync.Remote,
-			Token:     cfg.Sync.Token,
-			Interval:  cfg.Sync.ParseInterval(),
-			Reindexer: w,
-		})
-		if err != nil {
-			slog.Error("failed to create sync", slog.Any("error", err))
-		} else {
+	var gs *mindsync.Manager
+	if cfg.Sync.Enabled {
+		remotes := cfg.Sync.Remotes()
+		if len(remotes) > 0 {
+			gs = mindsync.NewManager(w.Root(), cfgPath, cfg, w)
 			if err := gs.Start(context.Background()); err != nil {
 				slog.Error("failed to start sync", slog.Any("error", err))
 				gs = nil
@@ -144,7 +137,7 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	}
 
 	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-		return mindmcp.NewServer(w).MCPServer()
+		return mindmcp.NewServer(w, gs).MCPServer()
 	}, nil)
 
 	mux := http.NewServeMux()
@@ -158,7 +151,7 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 			return
 		}
 		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(current.Masked())
+		json.NewEncoder(rw).Encode(current)
 	})
 
 	mux.HandleFunc("PUT /api/settings", func(rw http.ResponseWriter, r *http.Request) {
@@ -168,23 +161,15 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 			return
 		}
 
-		// Load existing config to preserve token if masked
-		existing, _ := config.Load(cfgPath)
-
 		var incoming config.Config
 		if err := json.Unmarshal(body, &incoming); err != nil {
 			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// If the token is masked (unchanged from UI), keep the original
-		if incoming.Sync.Token == "********" {
-			incoming.Sync.Token = existing.Sync.Token
-		}
-
-		// Validate: if sync enabled, remote is required
-		if incoming.Sync.Enabled && incoming.Sync.Remote == "" {
-			http.Error(rw, "sync remote is required when sync is enabled", http.StatusBadRequest)
+		// Validate: if sync enabled, need at least a default or a mapping
+		if incoming.Sync.Enabled && incoming.Sync.Default == "" && len(incoming.Sync.Mappings) == 0 {
+			http.Error(rw, "sync requires at least a default remote or one mapping", http.StatusBadRequest)
 			return
 		}
 
@@ -195,7 +180,7 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 
 		slog.Info("settings saved", slog.String("path", cfgPath))
 		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(incoming.Masked())
+		json.NewEncoder(rw).Encode(&incoming)
 	})
 
 	mux.HandleFunc("POST /api/restart", func(rw http.ResponseWriter, r *http.Request) {

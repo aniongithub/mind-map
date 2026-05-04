@@ -1,20 +1,21 @@
 // Package sync provides git-based wiki synchronization.
-// It pulls from and pushes to a remote git repository on an interval,
-// keeping wiki pages synchronized across machines.
+// It pulls from and pushes to remote git repositories on an interval,
+// keeping wiki pages synchronized across machines. Each prefix-to-remote
+// mapping gets its own shadow clone, so multiple repos can sync independently.
 package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aniongithub/mind-map/internal/config"
 )
 
 // Reindexer is the interface the sync engine uses to trigger a wiki reindex
@@ -23,292 +24,396 @@ type Reindexer interface {
 	Reindex(ctx context.Context) error
 }
 
-// Status represents the current sync state.
-type Status struct {
-	Enabled      bool      `json:"enabled"`
-	Remote       string    `json:"remote"`
-	LastSync     time.Time `json:"last_sync,omitempty"`
-	LastError    string    `json:"last_error,omitempty"`
-	Conflicts    []string  `json:"conflicts,omitempty"`
-	PendingFiles int       `json:"pending_files"`
+// RemoteStatus represents the sync state for a single remote.
+type RemoteStatus struct {
+	Remote    string   `json:"remote"`
+	Prefix    string   `json:"prefix"`
+	LastSync  string   `json:"last_sync,omitempty"`
+	LastError string   `json:"last_error,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
 }
 
-// GitSync manages bidirectional sync between a wiki directory and a git remote.
-type GitSync struct {
-	root      string
-	remote    string
-	token     string
-	interval  time.Duration
+// Status represents the overall sync state.
+type Status struct {
+	Enabled bool           `json:"enabled"`
+	Remotes []RemoteStatus `json:"remotes,omitempty"`
+}
+
+// Manager manages multiple sync targets, one per unique remote.
+type Manager struct {
+	wikiRoot  string
+	syncDir   string // ~/.mind-map/sync/
+	cfg       *config.Config
+	cfgPath   string
 	reindexer Reindexer
+	interval  time.Duration
+
+	mu      sync.Mutex
+	targets map[string]*syncTarget // remote URL -> target
+	cancel  context.CancelFunc
+	done    chan struct{}
+}
+
+// syncTarget manages a single shadow clone for one remote.
+type syncTarget struct {
+	remote   string
+	cloneDir string
+	prefixes []string // wiki prefixes that map to this remote
 
 	mu        sync.Mutex
-	status    Status
-	cancel    context.CancelFunc
-	done      chan struct{}
+	lastSync  time.Time
+	lastError string
+	conflicts []string
 }
 
-// Config holds the parameters for creating a GitSync.
-type Config struct {
-	Root      string
-	Remote    string
-	Token     string
-	Interval  time.Duration
-	Reindexer Reindexer
+// NewManager creates a sync manager.
+func NewManager(wikiRoot, cfgPath string, cfg *config.Config, reindexer Reindexer) *Manager {
+	home, _ := os.UserHomeDir()
+	syncDir := filepath.Join(home, ".mind-map", "sync")
+
+	return &Manager{
+		wikiRoot:  wikiRoot,
+		syncDir:   syncDir,
+		cfg:       cfg,
+		cfgPath:   cfgPath,
+		reindexer: reindexer,
+		interval:  cfg.Sync.ParseInterval(),
+		targets:   make(map[string]*syncTarget),
+	}
 }
 
-// New creates a GitSync but does not start it.
-func New(cfg Config) (*GitSync, error) {
-	if cfg.Remote == "" {
-		return nil, errors.New("sync remote is required")
-	}
-	if cfg.Root == "" {
-		return nil, errors.New("sync root is required")
-	}
-	if cfg.Interval < 5*time.Second {
-		cfg.Interval = 30 * time.Second
+// Start begins the background sync loop for all configured remotes.
+func (m *Manager) Start(ctx context.Context) error {
+	if err := os.MkdirAll(m.syncDir, 0o755); err != nil {
+		return fmt.Errorf("create sync dir: %w", err)
 	}
 
-	return &GitSync{
-		root:      cfg.Root,
-		remote:    cfg.Remote,
-		token:     cfg.Token,
-		interval:  cfg.Interval,
-		reindexer: cfg.Reindexer,
-		status: Status{
-			Enabled: true,
-			Remote:  cfg.Remote,
-		},
-	}, nil
-}
+	m.rebuildTargets()
 
-// Start begins the background sync loop.
-func (g *GitSync) Start(ctx context.Context) error {
-	if err := g.ensureGitRepo(ctx); err != nil {
-		return fmt.Errorf("git init: %w", err)
-	}
+	ctx, m.cancel = context.WithCancel(ctx)
+	m.done = make(chan struct{})
 
-	ctx, g.cancel = context.WithCancel(ctx)
-	g.done = make(chan struct{})
-
-	// Do an initial sync immediately
-	g.syncOnce(ctx)
+	// Initial sync
+	m.syncAll(ctx)
 
 	go func() {
-		defer close(g.done)
-		ticker := time.NewTicker(g.interval)
+		defer close(m.done)
+		ticker := time.NewTicker(m.interval)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				g.syncOnce(ctx)
+				m.syncAll(ctx)
 			}
 		}
 	}()
 
-	slog.Info("sync started", slog.String("remote", g.remote), slog.Duration("interval", g.interval))
+	slog.Info("sync manager started", slog.Int("targets", len(m.targets)), slog.Duration("interval", m.interval))
 	return nil
 }
 
-// Stop halts the background sync loop and waits for it to finish.
-func (g *GitSync) Stop() {
-	if g.cancel != nil {
-		g.cancel()
+// Stop halts the background sync loop.
+func (m *Manager) Stop() {
+	if m.cancel != nil {
+		m.cancel()
 	}
-	if g.done != nil {
-		<-g.done
+	if m.done != nil {
+		<-m.done
 	}
-	slog.Info("sync stopped")
+	slog.Info("sync manager stopped")
 }
 
-// Status returns the current sync status.
-func (g *GitSync) Status() Status {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.status
+// RegisterMapping adds a prefix-to-remote mapping, saves config, and
+// sets up the sync target. Returns immediately; sync happens on next cycle.
+func (m *Manager) RegisterMapping(prefix, remote string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.Sync.AddMapping(prefix, remote)
+	if err := config.Save(m.cfgPath, m.cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	m.rebuildTargetsLocked()
+	slog.Info("sync mapping registered", slog.String("prefix", prefix), slog.String("remote", remote))
+	return nil
 }
 
-// syncOnce performs a single pull-commit-push cycle.
-func (g *GitSync) syncOnce(ctx context.Context) {
-	g.mu.Lock()
-	g.status.LastError = ""
-	g.mu.Unlock()
+// HasMapping returns true if the given page path has a sync mapping
+// (either explicit or default).
+func (m *Manager) HasMapping(pagePath string) bool {
+	return m.cfg.Sync.ResolveRemote(pagePath) != ""
+}
 
-	// Ensure .gitignore exists
-	g.ensureGitignore()
+// Status returns the current sync status for all targets.
+func (m *Manager) Status() Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	// Pull remote changes
-	if err := g.pull(ctx); err != nil {
-		g.setError(fmt.Sprintf("pull: %v", err))
+	s := Status{Enabled: m.cfg.Sync.Enabled}
+	for _, t := range m.targets {
+		t.mu.Lock()
+		rs := RemoteStatus{
+			Remote:    t.remote,
+			Prefix:    strings.Join(t.prefixes, ", "),
+			Conflicts: t.conflicts,
+		}
+		if !t.lastSync.IsZero() {
+			rs.LastSync = t.lastSync.Format(time.RFC3339)
+		}
+		rs.LastError = t.lastError
+		t.mu.Unlock()
+		s.Remotes = append(s.Remotes, rs)
+	}
+	return s
+}
+
+// rebuildTargets rebuilds the target map from config. Caller must NOT hold m.mu.
+func (m *Manager) rebuildTargets() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rebuildTargetsLocked()
+}
+
+// rebuildTargetsLocked rebuilds targets. Caller must hold m.mu.
+func (m *Manager) rebuildTargetsLocked() {
+	// Build remote -> prefixes map
+	remotePrefixes := make(map[string][]string)
+	if m.cfg.Sync.Default != "" {
+		remotePrefixes[m.cfg.Sync.Default] = append(remotePrefixes[m.cfg.Sync.Default], "")
+	}
+	for _, mapping := range m.cfg.Sync.Mappings {
+		if mapping.Remote != "" {
+			remotePrefixes[mapping.Remote] = append(remotePrefixes[mapping.Remote], mapping.Prefix)
+		}
+	}
+
+	// Create or update targets
+	for remote, prefixes := range remotePrefixes {
+		if t, exists := m.targets[remote]; exists {
+			t.prefixes = prefixes
+		} else {
+			dirName := sanitizeDirName(remote)
+			m.targets[remote] = &syncTarget{
+				remote:   remote,
+				cloneDir: filepath.Join(m.syncDir, dirName),
+				prefixes: prefixes,
+			}
+		}
+	}
+
+	// Remove targets no longer in config
+	for remote := range m.targets {
+		if _, exists := remotePrefixes[remote]; !exists {
+			delete(m.targets, remote)
+		}
+	}
+}
+
+// syncAll syncs all targets.
+func (m *Manager) syncAll(ctx context.Context) {
+	m.mu.Lock()
+	targets := make([]*syncTarget, 0, len(m.targets))
+	for _, t := range m.targets {
+		targets = append(targets, t)
+	}
+	m.mu.Unlock()
+
+	for _, t := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		m.syncTarget(ctx, t)
+	}
+}
+
+// syncTarget syncs a single remote: pull -> copy in -> reindex -> copy out -> commit -> push.
+func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
+	t.mu.Lock()
+	t.lastError = ""
+	t.mu.Unlock()
+
+	// Ensure clone exists
+	if err := m.ensureClone(ctx, t); err != nil {
+		t.setError(fmt.Sprintf("clone: %v", err))
 		return
 	}
 
-	// Check for conflicts after pull
-	conflicts := g.checkConflicts(ctx)
+	// Pull
+	if err := gitCmd(ctx, t.cloneDir, "fetch", "origin"); err != nil {
+		t.setError(fmt.Sprintf("fetch: %v", err))
+		return
+	}
 
-	// Reindex after pull to pick up remote changes
-	if g.reindexer != nil {
-		if err := g.reindexer.Reindex(ctx); err != nil {
+	// Check if remote branch exists
+	if err := gitCmd(ctx, t.cloneDir, "rev-parse", "--verify", "origin/main"); err == nil {
+		if err := gitCmd(ctx, t.cloneDir, "merge", "origin/main", "--allow-unrelated-histories", "--no-edit"); err != nil {
+			slog.Warn("merge conflict", slog.String("remote", t.remote), slog.Any("error", err))
+		}
+	}
+
+	// Copy from clone to wiki (pull direction)
+	m.copyToWiki(t)
+
+	// Reindex to pick up pulled changes
+	if m.reindexer != nil {
+		if err := m.reindexer.Reindex(ctx); err != nil {
 			slog.Warn("reindex after pull failed", slog.Any("error", err))
 		}
 	}
 
-	// Stage and commit local changes
-	if err := g.commitAll(ctx); err != nil {
-		g.setError(fmt.Sprintf("commit: %v", err))
+	// Copy from wiki to clone (push direction)
+	m.copyFromWiki(t)
+
+	// Check for conflicts
+	conflicts := checkConflicts(ctx, t.cloneDir)
+
+	// Commit and push
+	ensureGitignore(t.cloneDir)
+	if err := gitCmd(ctx, t.cloneDir, "add", "-A"); err != nil {
+		t.setError(fmt.Sprintf("add: %v", err))
 		return
 	}
 
-	// Push
-	if err := g.push(ctx); err != nil {
-		g.setError(fmt.Sprintf("push: %v", err))
-		return
+	// Only commit if there are staged changes
+	if err := gitCmd(ctx, t.cloneDir, "diff", "--cached", "--quiet"); err != nil {
+		hostname, _ := os.Hostname()
+		msg := fmt.Sprintf("sync from %s at %s", hostname, time.Now().UTC().Format(time.RFC3339))
+		if err := gitCmd(ctx, t.cloneDir, "commit", "-m", msg); err != nil {
+			t.setError(fmt.Sprintf("commit: %v", err))
+			return
+		}
 	}
 
-	g.mu.Lock()
-	g.status.LastSync = time.Now()
-	g.status.Conflicts = conflicts
-	g.status.LastError = ""
-	g.mu.Unlock()
-
-	if len(conflicts) > 0 {
-		slog.Warn("sync complete with conflicts", slog.Int("conflicts", len(conflicts)))
-	} else {
-		slog.Debug("sync complete")
+	// Push (only if we have commits)
+	if err := gitCmd(ctx, t.cloneDir, "rev-parse", "HEAD"); err == nil {
+		if err := gitCmd(ctx, t.cloneDir, "push", "-u", "origin", "main"); err != nil {
+			t.setError(fmt.Sprintf("push: %v", err))
+			return
+		}
 	}
+
+	t.mu.Lock()
+	t.lastSync = time.Now()
+	t.lastError = ""
+	t.conflicts = conflicts
+	t.mu.Unlock()
+
+	slog.Debug("sync target complete", slog.String("remote", t.remote))
 }
 
-// ensureGitRepo initializes the wiki directory as a git repo if needed,
-// and configures the remote.
-func (g *GitSync) ensureGitRepo(ctx context.Context) error {
-	gitDir := filepath.Join(g.root, ".git")
-	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		slog.Info("initializing git repo for sync", slog.String("root", g.root))
-		if err := g.git(ctx, "init"); err != nil {
-			return err
-		}
-		// Set default branch to main
-		if err := g.git(ctx, "checkout", "-b", "main"); err != nil {
-			// May already be on main
-			slog.Debug("checkout main failed (may already exist)", slog.Any("error", err))
-		}
+// ensureClone initializes the shadow clone if it doesn't exist.
+func (m *Manager) ensureClone(ctx context.Context, t *syncTarget) error {
+	gitDir := filepath.Join(t.cloneDir, ".git")
+	if _, err := os.Stat(gitDir); err == nil {
+		return nil // already cloned
 	}
 
-	// Configure remote
-	remote := g.authRemote()
-	_ = g.git(ctx, "remote", "remove", "origin")
-	if err := g.git(ctx, "remote", "add", "origin", remote); err != nil {
-		return fmt.Errorf("add remote: %w", err)
+	if err := os.MkdirAll(t.cloneDir, 0o755); err != nil {
+		return err
 	}
+
+	slog.Info("initializing shadow clone", slog.String("remote", t.remote), slog.String("dir", t.cloneDir))
+	if err := gitCmd(ctx, t.cloneDir, "init"); err != nil {
+		return err
+	}
+	_ = gitCmd(ctx, t.cloneDir, "checkout", "-b", "main")
+	if err := gitCmd(ctx, t.cloneDir, "remote", "add", "origin", t.remote); err != nil {
+		return err
+	}
+
+	// Configure committer
+	_ = gitCmd(ctx, t.cloneDir, "config", "user.email", "mind-map@localhost")
+	_ = gitCmd(ctx, t.cloneDir, "config", "user.name", "mind-map")
+
+	// TODO: install pre-commit hook to scan for secrets/credentials
+	// before they get pushed to a potentially public remote.
 
 	return nil
 }
 
-// ensureGitignore creates a .gitignore if it doesn't exist,
-// ignoring the SQLite database and other transient files.
-func (g *GitSync) ensureGitignore() {
-	path := filepath.Join(g.root, ".gitignore")
-	if _, err := os.Stat(path); err == nil {
-		return
+// copyToWiki copies files from the shadow clone to the wiki directory.
+func (m *Manager) copyToWiki(t *syncTarget) {
+	for _, prefix := range t.prefixes {
+		wikiDir := filepath.Join(m.wikiRoot, prefix)
+		os.MkdirAll(wikiDir, 0o755)
+
+		filepath.WalkDir(t.cloneDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			name := d.Name()
+			if strings.HasPrefix(name, ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+				return nil
+			}
+			rel, _ := filepath.Rel(t.cloneDir, path)
+			dst := filepath.Join(wikiDir, rel)
+			os.MkdirAll(filepath.Dir(dst), 0o755)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			os.WriteFile(dst, data, 0o644)
+			return nil
+		})
 	}
-	content := ".mind-map.db\n.mind-map.db-wal\n.mind-map.db-shm\n"
-	os.WriteFile(path, []byte(content), 0o644)
 }
 
-// pull fetches and merges from the remote.
-func (g *GitSync) pull(ctx context.Context) error {
-	// Check if remote has any commits first
-	err := g.git(ctx, "fetch", "origin")
-	if err != nil {
-		return err
-	}
-
-	// Check if the remote branch exists
-	err = g.git(ctx, "rev-parse", "--verify", "origin/main")
-	if err != nil {
-		// Remote has no commits yet, skip pull
-		slog.Debug("remote branch not found, skipping pull")
-		return nil
-	}
-
-	// Try to merge
-	err = g.git(ctx, "merge", "origin/main", "--allow-unrelated-histories", "--no-edit")
-	if err != nil {
-		// Merge conflict -- leave markers in files for user resolution
-		slog.Warn("merge conflict detected", slog.Any("error", err))
-	}
-	return nil
-}
-
-// commitAll stages all changes and commits if there are any.
-func (g *GitSync) commitAll(ctx context.Context) error {
-	if err := g.git(ctx, "add", "-A"); err != nil {
-		return err
-	}
-
-	// Check if there's anything to commit
-	err := g.git(ctx, "diff", "--cached", "--quiet")
-	if err == nil {
-		// No changes staged
-		return nil
-	}
-
-	hostname, _ := os.Hostname()
-	msg := fmt.Sprintf("sync from %s at %s", hostname, time.Now().UTC().Format(time.RFC3339))
-	return g.git(ctx, "commit", "-m", msg)
-}
-
-// push pushes commits to the remote.
-func (g *GitSync) push(ctx context.Context) error {
-	// Check if we have any commits
-	err := g.git(ctx, "rev-parse", "HEAD")
-	if err != nil {
-		// No commits yet
-		return nil
-	}
-
-	return g.git(ctx, "push", "-u", "origin", "main")
-}
-
-// checkConflicts looks for merge conflict markers in tracked files.
-func (g *GitSync) checkConflicts(ctx context.Context) []string {
-	out, err := g.gitOutput(ctx, "diff", "--name-only", "--diff-filter=U")
-	if err != nil {
-		return nil
-	}
-
-	var conflicts []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && strings.HasSuffix(line, ".md") {
-			conflicts = append(conflicts, strings.TrimSuffix(line, ".md"))
+// copyFromWiki copies files from the wiki directory to the shadow clone.
+func (m *Manager) copyFromWiki(t *syncTarget) {
+	for _, prefix := range t.prefixes {
+		wikiDir := filepath.Join(m.wikiRoot, prefix)
+		if _, err := os.Stat(wikiDir); err != nil {
+			continue
 		}
+
+		filepath.WalkDir(wikiDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			name := d.Name()
+			if strings.HasPrefix(name, ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+				return nil
+			}
+			rel, _ := filepath.Rel(wikiDir, path)
+			dst := filepath.Join(t.cloneDir, rel)
+			os.MkdirAll(filepath.Dir(dst), 0o755)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			os.WriteFile(dst, data, 0o644)
+			return nil
+		})
 	}
-	return conflicts
 }
 
-// authRemote returns the remote URL with token injected if needed.
-func (g *GitSync) authRemote() string {
-	if g.token == "" {
-		return g.remote
-	}
+// --- helpers ---
 
-	// Only inject token for HTTPS URLs
-	u, err := url.Parse(g.remote)
-	if err != nil || u.Scheme != "https" {
-		return g.remote
-	}
-
-	u.User = url.UserPassword("x-access-token", g.token)
-	return u.String()
+func (t *syncTarget) setError(msg string) {
+	slog.Warn("sync error", slog.String("remote", t.remote), slog.String("error", msg))
+	t.mu.Lock()
+	t.lastError = msg
+	t.mu.Unlock()
 }
 
-// git runs a git command in the wiki directory.
-func (g *GitSync) git(ctx context.Context, args ...string) error {
+func gitCmd(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = g.root
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -317,21 +422,40 @@ func (g *GitSync) git(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// gitOutput runs a git command and returns stdout.
-func (g *GitSync) gitOutput(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = g.root
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+func checkConflicts(ctx context.Context, dir string) []string {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "--diff-filter=U")
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return nil
 	}
-	return string(out), nil
+	var conflicts []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && strings.HasSuffix(line, ".md") {
+			conflicts = append(conflicts, strings.TrimSuffix(line, ".md"))
+		}
+	}
+	return conflicts
 }
 
-func (g *GitSync) setError(msg string) {
-	slog.Warn("sync error", slog.String("error", msg))
-	g.mu.Lock()
-	g.status.LastError = msg
-	g.mu.Unlock()
+func ensureGitignore(dir string) {
+	path := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	os.WriteFile(path, []byte(".mind-map.db\n.mind-map.db-wal\n.mind-map.db-shm\n"), 0o644)
+}
+
+// sanitizeDirName converts a remote URL to a safe directory name.
+func sanitizeDirName(remote string) string {
+	// "https://github.com/user/repo.wiki.git" -> "github.com_user_repo.wiki"
+	s := remote
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "git@")
+	s = strings.TrimSuffix(s, ".git")
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, ":", "_")
+	return s
 }

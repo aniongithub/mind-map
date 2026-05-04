@@ -5,23 +5,35 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/wiki"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// SyncRegistrar allows the MCP server to register sync mappings and
+// check whether a page path has a sync target configured.
+type SyncRegistrar interface {
+	RegisterMapping(prefix, remote string) error
+	HasMapping(pagePath string) bool
+}
+
 // Server wraps a Wiki and exposes it as MCP tools.
 type Server struct {
 	wiki   *wiki.Wiki
+	sync   SyncRegistrar
 	server *mcp.Server
 }
 
 // NewServer creates an MCP server backed by the given wiki.
-func NewServer(w *wiki.Wiki) *Server {
+// sync may be nil if sync is not enabled.
+func NewServer(w *wiki.Wiki, sync SyncRegistrar) *Server {
 	s := &Server{
 		wiki: w,
+		sync: sync,
 		server: mcp.NewServer(&mcp.Implementation{
 			Name:    "mind-map",
 			Version: "0.1.0",
@@ -76,6 +88,11 @@ func (s *Server) registerTools() {
 		Name:        "get_backlinks",
 		Description: "Get all pages that link to the specified page.",
 	}, s.getBacklinks)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "register_sync",
+		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Auth uses the machine's existing git credentials.",
+	}, s.registerSync)
 }
 
 // --- Tool input types ---
@@ -101,6 +118,11 @@ type updateInput struct {
 
 type listInput struct {
 	Prefix string `json:"prefix,omitempty" jsonschema:"filter pages by path prefix"`
+}
+
+type registerSyncInput struct {
+	Prefix string `json:"prefix" jsonschema:"wiki path prefix to sync, e.g. projects/mind-map"`
+	Remote string `json:"remote" jsonschema:"git remote URL, e.g. https://github.com/user/repo.wiki.git"`
 }
 
 // --- Tool handlers ---
@@ -145,11 +167,23 @@ func (s *Server) createPage(ctx context.Context, _ *mcp.CallToolRequest, input c
 		return nil, nil, err
 	}
 	slog.Info("tool.create_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: "Created page: " + input.Path},
-		},
-	}, nil, nil
+
+	content := []mcp.Content{
+		&mcp.TextContent{Text: "Created page: " + input.Path},
+	}
+
+	// Check if this path has a sync mapping; if not, hint the agent
+	if s.sync != nil && !s.sync.HasMapping(input.Path) {
+		prefix := topPrefix(input.Path)
+		if prefix != "" {
+			content = append(content, &mcp.TextContent{
+				Text: fmt.Sprintf("Note: '%s' has no sync mapping. If this project has a GitHub repo, "+
+					"ask the user if they want to sync it, then call register_sync with the prefix and remote URL.", prefix),
+			})
+		}
+	}
+
+	return &mcp.CallToolResult{Content: content}, nil, nil
 }
 
 func (s *Server) updatePage(ctx context.Context, _ *mcp.CallToolRequest, input updateInput) (*mcp.CallToolResult, any, error) {
@@ -213,4 +247,41 @@ func textResult(v any) (*mcp.CallToolResult, any, error) {
 			&mcp.TextContent{Text: string(data)},
 		},
 	}, nil, nil
+}
+
+func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input registerSyncInput) (*mcp.CallToolResult, any, error) {
+	if s.sync == nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "Sync is not enabled. Enable it in the settings page first."},
+			},
+		}, nil, nil
+	}
+
+	if input.Prefix == "" || input.Remote == "" {
+		return nil, nil, fmt.Errorf("both prefix and remote are required")
+	}
+
+	if err := s.sync.RegisterMapping(input.Prefix, input.Remote); err != nil {
+		slog.Error("tool.register_sync failed", slog.String("prefix", input.Prefix), slog.Any("error", err))
+		return nil, nil, err
+	}
+
+	slog.Info("tool.register_sync", slog.String("prefix", input.Prefix), slog.String("remote", input.Remote))
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Sync registered: pages under '%s' will sync to %s", input.Prefix, input.Remote)},
+		},
+	}, nil, nil
+}
+
+// topPrefix extracts the top-level prefix from a page path.
+// "projects/mind-map/design" -> "projects/mind-map"
+// "notes" -> ""
+func topPrefix(path string) string {
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }
