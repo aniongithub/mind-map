@@ -86,10 +86,18 @@ func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration) *servi
 		Executable:  execPath,
 	}
 
-	// On macOS, install as a user agent (no root required)
+	// Run as the invoking user, not root. This ensures the service and
+	// stdio agents share the same file ownership on the wiki directory.
 	if runtime.GOOS == "darwin" {
 		cfg.Option = service.KeyValue{
 			"UserService": true,
+		}
+	} else if runtime.GOOS == "linux" {
+		cfg.UserName = os.Getenv("SUDO_USER")
+		if cfg.UserName == "" {
+			if u := os.Getenv("USER"); u != "root" {
+				cfg.UserName = u
+			}
 		}
 	}
 
