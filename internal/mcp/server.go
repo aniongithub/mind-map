@@ -30,13 +30,16 @@ type Server struct {
 
 // NewServer creates an MCP server backed by the given wiki.
 // sync may be nil if sync is not enabled.
-func NewServer(w *wiki.Wiki, sync SyncRegistrar) *Server {
+func NewServer(w *wiki.Wiki, sync SyncRegistrar, version string) *Server {
+	if version == "" {
+		version = "dev"
+	}
 	s := &Server{
 		wiki: w,
 		sync: sync,
 		server: mcp.NewServer(&mcp.Implementation{
 			Name:    "mind-map",
-			Version: "0.1.0",
+			Version: version,
 		}, nil),
 	}
 	s.registerTools()
