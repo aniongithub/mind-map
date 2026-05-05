@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -24,11 +25,46 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via -ldflags "-X main.version=vX.Y".
+// Falls back to VCS info from runtime/debug for dev builds.
+var version = ""
+
+func getVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		rev := ""
+		dirty := false
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				if len(s.Value) > 7 {
+					rev = s.Value[:7]
+				} else {
+					rev = s.Value
+				}
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+		if rev != "" {
+			v := "dev (" + rev
+			if dirty {
+				v += ", dirty"
+			}
+			return v + ")"
+		}
+	}
+	return "dev"
+}
+
 var rootCmd = &cobra.Command{
-	Use:   "mind-map",
-	Short: "A wiki engine with MCP interface for AI agents",
-	Long:  "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP (stdio) or a REST API (serve). Agents use stdio, humans use the web UI.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
-	RunE:  runStdio,
+	Use:     "mind-map",
+	Short:   "A wiki engine with MCP interface for AI agents",
+	Long:    "mind-map is a wiki that stores pages as markdown files, indexes them with SQLite FTS5, and exposes everything via MCP (stdio) or a REST API (serve). Agents use stdio, humans use the web UI.\n\nRunning without a subcommand starts the MCP server in stdio mode.",
+	Version: getVersion(),
+	RunE:    runStdio,
 }
 
 var serveCmd = &cobra.Command{
@@ -60,7 +96,7 @@ func runStdio(cmd *cobra.Command, args []string) error {
 	}
 	defer w.Close()
 
-	s := mindmcp.NewServer(w, nil)
+	s := mindmcp.NewServer(w, nil, getVersion())
 	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 	return s.MCPServer().Run(cmd.Context(), &mcpsdk.StdioTransport{})
 }
@@ -141,6 +177,10 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 
 	// REST API for wiki operations (used by web UI)
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /api/version", func(rw http.ResponseWriter, r *http.Request) {
+		jsonResponse(rw, map[string]string{"version": getVersion()})
+	})
 
 	mux.HandleFunc("GET /api/context", func(rw http.ResponseWriter, r *http.Request) {
 		wctx, err := w.Context(r.Context())

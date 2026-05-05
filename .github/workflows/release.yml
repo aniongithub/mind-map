@@ -47,7 +47,8 @@ jobs:
 
             # Cross-compile (pure Go, no CGO needed)
             GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-              go build -o ${{ matrix.artifact }} ./cmd/mind-map/
+              go build -ldflags "-X main.version=${{ github.event.release.tag_name }}" \
+              -o ${{ matrix.artifact }} ./cmd/mind-map/
 
             # Package as tarball
             tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}

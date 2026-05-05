@@ -178,7 +178,10 @@ if ($installService -match '^[Yy]$') {
 Write-Step "Configuring MCP clients..."
 
 $mcpServerEntry = @{
+    type    = "local"
     command = $BinaryPath
+    args    = @()
+    tools   = @("*")
 }
 
 function Set-McpConfig {

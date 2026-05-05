@@ -187,7 +187,7 @@ configure_mcp_client() {
   local client_name="$2"
 
   local mcp_entry
-  mcp_entry="{\"command\": \"${INSTALL_DIR}/mind-map\"}"
+  mcp_entry="{\"type\": \"local\", \"command\": \"${INSTALL_DIR}/mind-map\", \"args\": [], \"tools\": [\"*\"]}"
 
   if [ ! -f "$config_file" ]; then
     mkdir -p "$(dirname "$config_file")"

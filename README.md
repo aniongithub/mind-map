@@ -119,7 +119,10 @@ The web UI speaks the same language as the wiki engine. If an agent creates a pa
 {
   "mcpServers": {
     "mind-map": {
-      "command": "mind-map"
+      "type": "local",
+      "command": "mind-map",
+      "args": [],
+      "tools": ["*"]
     }
   }
 }
