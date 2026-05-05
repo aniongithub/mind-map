@@ -25,6 +25,7 @@ mind-map uses **stdio** transport. MCP clients launch it as a subprocess:
 {
   "mcpServers": {
     "mind-map": {
+      "tools": ["*"],
       "command": "mind-map"
     }
   }
