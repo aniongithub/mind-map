@@ -141,7 +141,7 @@ foreach ($dir in $SkillDirs) {
 # 6. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-$DefaultPort = "51849"
+$DefaultPort = "80"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $servicePort = $DefaultPort
 

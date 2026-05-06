@@ -130,7 +130,7 @@ done
 # Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-DEFAULT_PORT="51849"
+DEFAULT_PORT="80"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
 SERVICE_PORT="$DEFAULT_PORT"
 
