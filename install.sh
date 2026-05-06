@@ -133,19 +133,64 @@ done
 DEFAULT_PORT="80"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
 SERVICE_PORT="$DEFAULT_PORT"
+ENABLE_MDNS=true
+
+# Check whether a TCP port is available
+port_available() {
+  if command -v nc >/dev/null 2>&1; then
+    ! nc -z 127.0.0.1 "$1" 2>/dev/null
+  elif command -v ss >/dev/null 2>&1; then
+    ! ss -tlnH "sport = :$1" 2>/dev/null | grep -q .
+  else
+    # No checker available — assume available
+    return 0
+  fi
+}
 
 echo ""
 printf "Would you like to install mind-map as a persistent service? [y/N] "
 read -r INSTALL_SERVICE < /dev/tty || INSTALL_SERVICE="n"
 
 if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
-  printf "Port [${DEFAULT_PORT}]: "
-  read -r SERVICE_PORT < /dev/tty || SERVICE_PORT=""
-  SERVICE_PORT="${SERVICE_PORT:-$DEFAULT_PORT}"
+  # --- mDNS ---
+  printf "Enable mDNS (advertise as mind-map.local)? [Y/n] "
+  read -r MDNS_ANSWER < /dev/tty || MDNS_ANSWER=""
+  if [[ "$MDNS_ANSWER" =~ ^[Nn]$ ]]; then
+    ENABLE_MDNS=false
+  fi
+
+  # --- Port ---
+  if ! port_available "$DEFAULT_PORT"; then
+    echo "  Note: Port ${DEFAULT_PORT} is already in use."
+  fi
+  while true; do
+    if port_available "$DEFAULT_PORT"; then
+      printf "Port [${DEFAULT_PORT}]: "
+    else
+      printf "Enter a different port: "
+    fi
+    read -r SERVICE_PORT < /dev/tty || SERVICE_PORT=""
+    SERVICE_PORT="${SERVICE_PORT:-$DEFAULT_PORT}"
+    if ! [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]]; then
+      echo "  Invalid port number."
+      continue
+    fi
+    if ! port_available "$SERVICE_PORT"; then
+      echo "  Port ${SERVICE_PORT} is already in use."
+      continue
+    fi
+    break
+  done
 
   printf "Wiki directory [${DEFAULT_WIKI_DIR}]: "
   read -r SERVICE_WIKI_DIR < /dev/tty || SERVICE_WIKI_DIR=""
   SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
+
+  # Build service flags
+  SVC_FLAGS=(--addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}")
+  if [ "$ENABLE_MDNS" = false ]; then
+    SVC_FLAGS+=(--no-mdns)
+  fi
 
   # Use the built-in service manager (kardianos/service)
   # System services require elevated privileges on Linux
@@ -156,20 +201,23 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
     # Uninstall existing service if present (handles reinstall)
     sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null || true
     sudo "${INSTALL_DIR}/mind-map" service uninstall 2>/dev/null || true
-    sudo "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
-      sudo "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
+    sudo "${INSTALL_DIR}/mind-map" service install "${SVC_FLAGS[@]}" && \
+      sudo "${INSTALL_DIR}/mind-map" service start "${SVC_FLAGS[@]}"
     # Fix ownership: the service runs as root but agents run as the user.
     # Both need write access to the wiki dir and SQLite database.
     sudo chown -R "$(id -u):$(id -g)" "${SERVICE_WIKI_DIR}"
   else
     "${INSTALL_DIR}/mind-map" service stop 2>/dev/null || true
     "${INSTALL_DIR}/mind-map" service uninstall 2>/dev/null || true
-    "${INSTALL_DIR}/mind-map" service install --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}" && \
-      "${INSTALL_DIR}/mind-map" service start --addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}"
+    "${INSTALL_DIR}/mind-map" service install "${SVC_FLAGS[@]}" && \
+      "${INSTALL_DIR}/mind-map" service start "${SVC_FLAGS[@]}"
   fi
 
   echo ""
   echo "  Web UI: http://localhost:${SERVICE_PORT}"
+  if [ "$ENABLE_MDNS" = true ]; then
+    echo "  mDNS:   http://mind-map.local$([ "$SERVICE_PORT" = "80" ] && echo "" || echo ":${SERVICE_PORT}")"
+  fi
   echo ""
   echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"
 fi
