@@ -109,11 +109,17 @@ if ! grep -q "mind-map\.local" /etc/hosts 2>/dev/null; then
 fi
 
 # Set up TLS so https://mind-map.local works without browser warnings
+TLS_DIR="${HOME}/.mind-map/tls"
 echo "==> Setting up TLS certificates..."
+# Generate certs as the current user (writes to ~/.mind-map/tls/)
+"${INSTALL_DIR}/mind-map" tls generate --tls-dir "${TLS_DIR}" 2>&1
+# Install CA in system trust store (requires elevated privileges on Linux)
 if [[ "$(uname -s)" == "Linux" ]]; then
-  sudo "${INSTALL_DIR}/mind-map" tls setup 2>&1
+  sudo "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
+    echo "  Note: Could not install CA. Run 'sudo mind-map tls install-ca --tls-dir ${TLS_DIR}' manually."
 else
-  "${INSTALL_DIR}/mind-map" tls setup 2>&1
+  "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
+    echo "  Note: Could not install CA. Run 'mind-map tls install-ca' manually."
 fi
 
 echo "==> Installed mind-map to ${INSTALL_DIR}/mind-map"
