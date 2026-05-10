@@ -155,6 +155,8 @@ On Linux, Chrome uses its own NSS certificate store. The installer handles this 
 
 ## MCP Client Configuration
 
+The installer automatically configures mind-map for GitHub Copilot, Claude, Cursor, and VS Code, and installs agent skills — so this is usually not needed. If you want to configure a client manually:
+
 ```json
 {
   "mcpServers": {
@@ -168,7 +170,7 @@ On Linux, Chrome uses its own NSS certificate store. The installer handles this 
 }
 ```
 
-That's it. No args needed — stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
+No args needed — stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
 
 ## Page Format
 
