@@ -18,6 +18,8 @@
   },
   "postCreateCommand": "go version && node --version",
   "postAttachCommand": "npm install --prefix webui",
+  "runArgs": ["--network=host"],
+  "postStartCommand": "sudo mkdir -p /run/dbus && sudo dbus-daemon --system --fork 2>/dev/null; sudo avahi-daemon --daemonize --no-drop-root 2>/dev/null; true",
   "customizations": {
     "vscode": {
       "extensions": [
