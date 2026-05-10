@@ -19,6 +19,7 @@ type mindMapService struct {
 	dir         string
 	webui       string
 	idleTimeout time.Duration
+	noMDNS      bool
 	stopCh      chan struct{}
 	errCh       chan error
 }
@@ -44,7 +45,7 @@ func (m *mindMapService) Start(s service.Service) error {
 	m.stopCh = make(chan struct{})
 	m.errCh = make(chan error, 1)
 	logging.SafeGo("http-server", func() {
-		if err := runHTTPServer(m.addr, m.dir, m.webui, m.idleTimeout, m.stopCh); err != nil {
+		if err := runHTTPServer(m.addr, m.dir, m.webui, m.idleTimeout, m.noMDNS, m.stopCh); err != nil {
 			slog.Error("HTTP server failed", slog.Any("error", err))
 			m.errCh <- err
 		}
@@ -68,7 +69,7 @@ func defaultWikiDir() string {
 	return filepath.Join(home, ".mind-map", "wiki")
 }
 
-func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration) *service.Config {
+func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration, noMDNS bool) *service.Config {
 	execPath, err := os.Executable()
 	if err != nil {
 		execPath = "mind-map"
@@ -76,6 +77,9 @@ func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration) *servi
 	args := []string{"serve", "--run-as-service", "--addr", addr, "--dir", dir, "--idle-timeout", idleTimeout.String()}
 	if webui != "" {
 		args = append(args, "--webui", webui)
+	}
+	if noMDNS {
+		args = append(args, "--no-mdns")
 	}
 
 	cfg := &service.Config{
@@ -113,10 +117,11 @@ var serviceCmd = &cobra.Command{
 func init() {
 	// Shared flags for service subcommands that need them
 	for _, cmd := range []*cobra.Command{serviceInstallCmd, serviceStartCmd, serviceStopCmd, serviceUninstallCmd, serviceStatusCmd} {
-		cmd.Flags().StringP("addr", "a", ":51849", "Address to listen on")
+		cmd.Flags().StringP("addr", "a", "127.0.0.1:80", "Address to listen on")
 		cmd.Flags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 		cmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded)")
 		cmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
+		cmd.Flags().Bool("no-mdns", false, "Disable mDNS service registration")
 	}
 
 	serviceCmd.AddCommand(serviceInstallCmd, serviceStartCmd, serviceStopCmd, serviceUninstallCmd, serviceStatusCmd)
@@ -131,13 +136,14 @@ var serviceInstallCmd = &cobra.Command{
 		dir, _ := cmd.Flags().GetString("dir")
 		webui, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
 		// Ensure wiki directory exists
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create wiki dir: %w", err)
 		}
 
-		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout))
+		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout, noMDNS))
 		if err != nil {
 			return fmt.Errorf("create service: %w", err)
 		}
@@ -161,8 +167,9 @@ var serviceStartCmd = &cobra.Command{
 		dir, _ := cmd.Flags().GetString("dir")
 		webui, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
-		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout))
+		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout, noMDNS))
 		if err != nil {
 			return err
 		}
@@ -184,8 +191,9 @@ var serviceStopCmd = &cobra.Command{
 		dir, _ := cmd.Flags().GetString("dir")
 		webui, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
-		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout))
+		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout, noMDNS))
 		if err != nil {
 			return err
 		}
@@ -205,8 +213,9 @@ var serviceUninstallCmd = &cobra.Command{
 		dir, _ := cmd.Flags().GetString("dir")
 		webui, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
-		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout))
+		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout, noMDNS))
 		if err != nil {
 			return err
 		}
@@ -228,8 +237,9 @@ var serviceStatusCmd = &cobra.Command{
 		dir, _ := cmd.Flags().GetString("dir")
 		webui, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
-		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout))
+		svc, err := service.New(&mindMapService{}, newServiceConfig(addr, dir, webui, idleTimeout, noMDNS))
 		if err != nil {
 			return err
 		}

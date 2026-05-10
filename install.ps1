@@ -141,19 +141,79 @@ foreach ($dir in $SkillDirs) {
 # 6. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-$DefaultPort = "51849"
+$DefaultPort = "80"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $servicePort = $DefaultPort
+$enableMdns = $true
+
+function Test-PortAvailable {
+    param([int]$Port)
+    try {
+        $listener = [System.Net.Sockets.TcpClient]::new()
+        $listener.Connect("127.0.0.1", $Port)
+        $listener.Close()
+        return $false  # connection succeeded — port is in use
+    } catch {
+        return $true   # connection refused — port is free
+    }
+}
 
 Write-Host ""
 $installService = Read-Host "Would you like to install mind-map as a persistent service? [y/N]"
 
 if ($installService -match '^[Yy]$') {
-    $servicePort = Read-Host "Port [$DefaultPort]"
-    if ([string]::IsNullOrWhiteSpace($servicePort)) { $servicePort = $DefaultPort }
+    # --- mDNS ---
+    $mdnsAnswer = Read-Host "Enable mDNS (advertise as mind-map.local)? [Y/n]"
+    if ($mdnsAnswer -match '^[Nn]$') {
+        $enableMdns = $false
+    }
+
+    # --- Port ---
+    if (-not (Test-PortAvailable -Port ([int]$DefaultPort))) {
+        Write-Warn "Port $DefaultPort is already in use."
+    }
+    while ($true) {
+        if (Test-PortAvailable -Port ([int]$DefaultPort)) {
+            $servicePort = Read-Host "Port [$DefaultPort] (enter nothing to auto-pick a free port)"
+        } else {
+            $servicePort = Read-Host "Enter a port (or nothing to auto-pick a free port)"
+        }
+        if ([string]::IsNullOrWhiteSpace($servicePort) -and -not (Test-PortAvailable -Port ([int]$DefaultPort))) {
+            # Auto-pick: scan from 8080 upward
+            $found = $false
+            for ($p = 8080; $p -le 8180; $p++) {
+                if (Test-PortAvailable -Port $p) {
+                    $servicePort = "$p"
+                    Write-Ok "Auto-selected port $servicePort"
+                    $found = $true
+                    break
+                }
+            }
+            if (-not $found) {
+                Write-Warn "Could not find a free port. Please enter one manually."
+                continue
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($servicePort)) { $servicePort = $DefaultPort }
+        if ($servicePort -notmatch '^\d+$') {
+            Write-Warn "Invalid port number."
+            continue
+        }
+        if (-not (Test-PortAvailable -Port ([int]$servicePort))) {
+            Write-Warn "Port $servicePort is already in use."
+            continue
+        }
+        break
+    }
 
     $serviceWikiDir = Read-Host "Wiki directory [$DefaultWikiDir]"
     if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
+
+    # Build service flags
+    $svcFlags = @("--addr", "127.0.0.1:$servicePort", "--dir", "$serviceWikiDir")
+    if (-not $enableMdns) {
+        $svcFlags += "--no-mdns"
+    }
 
     # Uninstall existing service if present (handles reinstall)
     $ErrorActionPreference = "Continue"
@@ -162,11 +222,15 @@ if ($installService -match '^[Yy]$') {
     $ErrorActionPreference = "Stop"
 
     # Install and start the service (already running as admin)
-    & $BinaryPath service install --addr ":$servicePort" --dir "$serviceWikiDir"
-    & $BinaryPath service start --addr ":$servicePort" --dir "$serviceWikiDir"
+    & $BinaryPath service install @svcFlags
+    & $BinaryPath service start @svcFlags
 
     Write-Host ""
     Write-Host "  Web UI: http://localhost:$servicePort" -ForegroundColor Cyan
+    if ($enableMdns) {
+        $mdnsUrl = if ($servicePort -eq "80") { "http://mind-map.local" } else { "http://mind-map.local:$servicePort" }
+        Write-Host "  mDNS:   $mdnsUrl" -ForegroundColor Cyan
+    }
     Write-Host ""
     Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
 }

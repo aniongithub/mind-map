@@ -7,15 +7,18 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
 	"github.com/aniongithub/mind-map/internal/logging"
+	mindmdns "github.com/aniongithub/mind-map/internal/mdns"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
 	mindsync "github.com/aniongithub/mind-map/internal/sync"
@@ -77,10 +80,11 @@ var serveCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 
-	serveCmd.Flags().StringP("addr", "a", ":51849", "Address to listen on")
+	serveCmd.Flags().StringP("addr", "a", "127.0.0.1:80", "Address to listen on")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
+	serveCmd.Flags().Bool("no-mdns", false, "Disable mDNS service registration")
 	serveCmd.Flags().Bool("run-as-service", false, "Run via kardianos/service (used by service manager)")
 	serveCmd.Flags().MarkHidden("run-as-service")
 	rootCmd.AddCommand(serveCmd)
@@ -111,8 +115,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		addr, _ := cmd.Flags().GetString("addr")
 		webuiDir, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
-		prg := &mindMapService{addr: addr, dir: dir, webui: webuiDir, idleTimeout: idleTimeout}
-		svc, err := service.New(prg, newServiceConfig(addr, dir, webuiDir, idleTimeout))
+		noMDNS, _ := cmd.Flags().GetBool("no-mdns")
+		prg := &mindMapService{addr: addr, dir: dir, webui: webuiDir, idleTimeout: idleTimeout, noMDNS: noMDNS}
+		svc, err := service.New(prg, newServiceConfig(addr, dir, webuiDir, idleTimeout, noMDNS))
 		if err != nil {
 			return fmt.Errorf("create service: %w", err)
 		}
@@ -140,13 +145,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// read idle-timeout for the non-service path
 	idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
+	noMDNS, _ := cmd.Flags().GetBool("no-mdns")
 
-	return runHTTPServer(addr, dir, webuiDir, idleTimeout, stopCh)
+	return runHTTPServer(addr, dir, webuiDir, idleTimeout, noMDNS, stopCh)
 }
 
 // runHTTPServer starts the HTTP server and blocks until stopCh is closed.
 // Shared by both the interactive `serve` command and the system service.
-func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
+func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, noMDNS bool, stopCh chan struct{}) error {
 	w, err := wiki.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open wiki: %w", err)
@@ -398,6 +404,22 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		slog.String("wiki", w.Root()),
 		slog.String("url", "http://localhost"+addr),
 	)
+
+	// Register mDNS service unless disabled
+	if !noMDNS {
+		port := 80
+		if _, p, err := net.SplitHostPort(addr); err == nil {
+			if parsed, err := strconv.Atoi(p); err == nil {
+				port = parsed
+			}
+		}
+		mdnsSrv, err := mindmdns.Register(port)
+		if err != nil {
+			slog.Warn("mDNS registration failed", slog.Any("error", err))
+		} else {
+			defer mdnsSrv.Shutdown()
+		}
+	}
 
 	go func() {
 		<-stopCh
