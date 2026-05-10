@@ -15,27 +15,16 @@ func registerSystem(port int) (Registration, error) {
 	if _, err := exec.LookPath("avahi-publish-service"); err != nil {
 		return nil, fmt.Errorf("avahi-publish-service not found: %w", err)
 	}
-	if _, err := exec.LookPath("avahi-publish-address"); err != nil {
-		return nil, fmt.Errorf("avahi-publish-address not found: %w", err)
-	}
 
 	ip := primaryIPv4()
 	if ip == "" {
 		return nil, fmt.Errorf("no usable IPv4 address found")
 	}
 
-	// Publish the address record: mind-map.local → <IP>
-	addrCmd := exec.Command("avahi-publish-address", "--no-fail", "mind-map.local", ip)
-	addrCmd.Stdout = nil
-	addrCmd.Stderr = nil
-	if err := addrCmd.Start(); err != nil {
-		return nil, fmt.Errorf("avahi-publish-address: %w", err)
-	}
-
-	// Publish the service record: mind-map._http._tcp on the given port
+	// Publish the service record: mind-map._http._tcp on the given port.
+	// Don't set --host so it uses the machine's real hostname (always resolvable).
 	svcCmd := exec.Command("avahi-publish-service",
 		"--no-fail",
-		"--host=mind-map.local",
 		"mind-map",
 		"_http._tcp",
 		strconv.Itoa(port),
@@ -43,10 +32,21 @@ func registerSystem(port int) (Registration, error) {
 	svcCmd.Stdout = nil
 	svcCmd.Stderr = nil
 	if err := svcCmd.Start(); err != nil {
-		// Clean up the address publisher
-		addrCmd.Process.Kill()
-		addrCmd.Wait()
 		return nil, fmt.Errorf("avahi-publish-service: %w", err)
+	}
+
+	// Best-effort: publish address record mind-map.local → <IP>.
+	// This may fail (e.g. name collision) — that's OK, the service
+	// record above is the important one.
+	var addrCmd *exec.Cmd
+	if path, err := exec.LookPath("avahi-publish-address"); err == nil {
+		addrCmd = exec.Command(path, "--no-fail", "mind-map.local", ip)
+		addrCmd.Stdout = nil
+		addrCmd.Stderr = nil
+		if err := addrCmd.Start(); err != nil {
+			slog.Warn("avahi-publish-address failed to start", slog.Any("error", err))
+			addrCmd = nil
+		}
 	}
 
 	slog.Info("mDNS registered (avahi)",
