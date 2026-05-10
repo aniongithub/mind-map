@@ -101,6 +101,13 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v setcap >/dev/null 2>&1; then
     echo "  Note: Could not set capability. Port 80 may require root."
 fi
 
+# Add mind-map.local to /etc/hosts for reliable local name resolution
+if ! grep -q "mind-map\.local" /etc/hosts 2>/dev/null; then
+  echo "127.0.0.1  mind-map.local" | sudo tee -a /etc/hosts >/dev/null 2>/dev/null && \
+    echo "==> Added mind-map.local to /etc/hosts" || \
+    echo "  Note: Could not update /etc/hosts. Add '127.0.0.1  mind-map.local' manually."
+fi
+
 echo "==> Installed mind-map to ${INSTALL_DIR}/mind-map"
 
 # Verify
@@ -140,7 +147,6 @@ done
 DEFAULT_PORT="80"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
 SERVICE_PORT="$DEFAULT_PORT"
-ENABLE_MDNS=true
 
 # Check whether a TCP port is available
 port_available() {
@@ -159,13 +165,6 @@ printf "Would you like to install mind-map as a persistent service? [y/N] "
 read -r INSTALL_SERVICE < /dev/tty || INSTALL_SERVICE="n"
 
 if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
-  # --- mDNS ---
-  printf "Enable mDNS (advertise as mind-map.local)? [Y/n] "
-  read -r MDNS_ANSWER < /dev/tty || MDNS_ANSWER=""
-  if [[ "$MDNS_ANSWER" =~ ^[Nn]$ ]]; then
-    ENABLE_MDNS=false
-  fi
-
   # --- Port ---
   if ! port_available "$DEFAULT_PORT"; then
     echo "  Warning: Port ${DEFAULT_PORT} is already in use."
@@ -209,9 +208,6 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
 
   # Build service flags
   SVC_FLAGS=(--addr "127.0.0.1:${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}")
-  if [ "$ENABLE_MDNS" = false ]; then
-    SVC_FLAGS+=(--no-mdns)
-  fi
 
   # Use the built-in service manager (kardianos/service)
   # System services require elevated privileges on Linux
@@ -235,9 +231,10 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   fi
 
   echo ""
-  echo "  Web UI: http://localhost:${SERVICE_PORT}"
-  if [ "$ENABLE_MDNS" = true ]; then
-    echo "  mDNS:   http://mind-map.local$([ "$SERVICE_PORT" = "80" ] && echo "" || echo ":${SERVICE_PORT}")"
+  if [ "$SERVICE_PORT" = "80" ]; then
+    echo "  Web UI: http://mind-map.local"
+  else
+    echo "  Web UI: http://mind-map.local:${SERVICE_PORT}"
   fi
   echo ""
   echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"

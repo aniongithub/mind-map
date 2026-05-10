@@ -13,9 +13,6 @@ RUN apt-get update \
         git \
         git-lfs \
         netcat-traditional \
-        avahi-daemon \
-        avahi-utils \
-        dbus \
         sudo \
     && git lfs install \
     && apt-get clean \
