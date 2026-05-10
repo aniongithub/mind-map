@@ -110,6 +110,10 @@ if ($hostsContent -notmatch 'mind-map\.local') {
     }
 }
 
+# Set up TLS so https://mind-map.local works without browser warnings
+Write-Step "Setting up TLS certificates..."
+& $BinaryPath tls setup
+
 # Verify
 try {
     & $BinaryPath --help | Out-Null
@@ -153,7 +157,7 @@ foreach ($dir in $SkillDirs) {
 # 6. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-$DefaultPort = "80"
+$DefaultPort = "443"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $servicePort = $DefaultPort
 
@@ -228,7 +232,7 @@ if ($installService -match '^[Yy]$') {
     & $BinaryPath service start @svcFlags
 
     Write-Host ""
-    $webUrl = if ($servicePort -eq "80") { "http://mind-map.local" } else { "http://mind-map.local:$servicePort" }
+    $webUrl = if ($servicePort -eq "443") { "https://mind-map.local" } else { "https://mind-map.local:$servicePort" }
     Write-Host "  Web UI: $webUrl" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray

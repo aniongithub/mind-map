@@ -113,7 +113,7 @@ var serviceCmd = &cobra.Command{
 func init() {
 	// Shared flags for service subcommands that need them
 	for _, cmd := range []*cobra.Command{serviceInstallCmd, serviceStartCmd, serviceStopCmd, serviceUninstallCmd, serviceStatusCmd} {
-		cmd.Flags().StringP("addr", "a", "127.0.0.1:80", "Address to listen on")
+		cmd.Flags().StringP("addr", "a", "127.0.0.1:443", "Address to listen on")
 		cmd.Flags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 		cmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded)")
 		cmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
