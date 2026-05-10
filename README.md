@@ -34,6 +34,8 @@ Agent: "What do we know about authentication?"
 
 ## Quick Install
 
+Unlike other wiki knowledge bases, you don't need a tutorial, any system dependencies, or RAM-guzzling UIs. Just copy-paste the command for your OS into a terminal, answer a few questions, and it's up and running — accessible in a browser and via MCP.
+
 ### Linux / macOS
 
 ```bash
