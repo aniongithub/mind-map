@@ -177,8 +177,8 @@ var serviceStartCmd = &cobra.Command{
 			return fmt.Errorf("start service: %w", err)
 		}
 		fmt.Println("Service started.")
-		fmt.Printf("  Web UI:       http://localhost%s\n", addr)
-		fmt.Printf("  MCP endpoint: http://localhost%s/mcp\n", addr)
+		fmt.Printf("  Web UI:       http://%s\n", addr)
+		fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
 		return nil
 	},
 }

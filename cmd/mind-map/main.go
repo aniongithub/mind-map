@@ -402,7 +402,7 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, noMDNS
 	slog.Info("mind-map server starting",
 		slog.String("addr", addr),
 		slog.String("wiki", w.Root()),
-		slog.String("url", "http://localhost"+addr),
+		slog.String("url", "http://"+addr),
 	)
 
 	// Register mDNS service unless disabled
