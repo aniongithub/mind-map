@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/logging"
+	mindtls "github.com/aniongithub/mind-map/internal/tls"
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )
@@ -170,8 +171,12 @@ var serviceStartCmd = &cobra.Command{
 			return fmt.Errorf("start service: %w", err)
 		}
 		fmt.Println("Service started.")
-		fmt.Printf("  Web UI:       http://%s\n", addr)
-		fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
+		scheme := "http"
+		if mindtls.HasCerts(mindtls.DefaultDir()) {
+			scheme = "https"
+		}
+		fmt.Printf("  Web UI:       %s://%s\n", scheme, addr)
+		fmt.Printf("  MCP endpoint: %s://%s/mcp\n", scheme, addr)
 		return nil
 	},
 }
