@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mind-map — Give your AI agent a memory it can actually use</title>
-  <meta name="description" content="A lightweight wiki that both AI agents and humans can read, write, and search. Pages are plain markdown. Portable, git-friendly and yours.">
+  <meta name="description" content="A lightweight wiki that puts AI agents and humans on equal ground. Plain markdown, SQLite FTS5 search, wikilinks, and MCP tools. One command to install, zero manual setup.">
   <meta property="og:title" content="mind-map">
   <meta property="og:description" content="Give your AI agent a memory it can actually use.">
   <meta property="og:type" content="website">
@@ -48,9 +48,10 @@
       </div>
       <h1>Give your AI agent a memory<br><span class="gradient-text">it can actually use.</span></h1>
       <p class="hero-sub">
-        A lightweight wiki that both AI agents and humans can read, write, and search.
-        Pages are plain markdown. Portable, git-friendly and yours.
-        Install in seconds and access it from anywhere.
+        A lightweight wiki that puts AI agents and humans on equal ground.
+        Pages are plain markdown with <a href="https://www.sqlite.org/fts5.html">SQLite FTS5</a> search, wikilinks, and backlinks.
+        One command installs the binary, sets up HTTPS at <code>mind-map.local</code>, and configures
+        every MCP client on your machine. Zero manual setup.
       </p>
       <div class="hero-cta">
         <div class="install-wrapper">
@@ -111,16 +112,17 @@
   <!-- Why -->
   <section class="section" id="why">
     <div class="section-inner">
-      <h2 class="section-title">Why?</h2>
-      <p class="section-sub">AI agents need persistent memory. Today's options are heavy desktop apps or throwaway context windows.</p>
+      <h2 class="section-title">Why a wiki?</h2>
+      <p class="section-sub">The idea of <a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">LLM-maintained knowledge bases</a> is gaining traction — agents that build and curate a persistent wiki rather than re-discovering answers via RAG. Tools like Obsidian are built with the user in mind, not the agent. mind-map puts both on equal ground.</p>
       <div class="two-col">
         <div class="col problem">
           <h2>The problem</h2>
-          <p>Existing agent memory tools require:</p>
+          <p>Existing tools require:</p>
           <ul>
             <li><span class="icon-bad">✗</span> Desktop apps with Node.js + Rust + WebKit</li>
-            <li><span class="icon-bad">✗</span> A display server -- can't run headless</li>
-            <li><span class="icon-bad">✗</span> No web access -- knowledge locked on one machine</li>
+            <li><span class="icon-bad">✗</span> A display server — can't run headless</li>
+            <li><span class="icon-bad">✗</span> Hand-rolled search scripts that break at scale</li>
+            <li><span class="icon-bad">✗</span> Knowledge re-discovered via RAG on every query</li>
             <li><span class="icon-bad">✗</span> Pages of install instructions</li>
           </ul>
         </div>
@@ -129,10 +131,10 @@
           <p>Give agents a wiki. It runs <em>anywhere</em>:</p>
           <ul>
             <li><span class="icon-good">✓</span> Single binary, zero runtime deps</li>
-            <li><span class="icon-good">✓</span> Headless or with built-in web UI</li>
-            <li><span class="icon-good">✓</span> Multiple agents via stdio -- no service required</li>
-            <li><span class="icon-good">✓</span> Browse and edit from any browser</li>
-            <li><span class="icon-good">✓</span> Git sync to GitHub repo wikis</li>
+            <li><span class="icon-good">✓</span> HTTPS at <code>mind-map.local</code> — no warnings</li>
+            <li><span class="icon-good">✓</span> First-class search via SQLite FTS5</li>
+            <li><span class="icon-good">✓</span> Agents use MCP, humans use the browser</li>
+            <li><span class="icon-good">✓</span> Auto-configures all MCP clients on install</li>
             <li><span class="icon-good">✓</span> <code>curl | bash</code> and you're done</li>
           </ul>
         </div>
@@ -144,7 +146,7 @@
   <section class="section section-dark" id="how">
     <div class="section-inner">
       <h2 class="section-title">How it works</h2>
-      <p class="section-sub">One protocol. One server. Two kinds of clients. Edit in the browser -- agents see the change instantly.</p>
+      <p class="section-sub">One protocol. One server. Two kinds of clients. Edit at <code>https://mind-map.local</code> — agents see the change instantly.</p>
       <div class="demo-container">
         <img src="screengrabs/mind-map-save-edit-retrieve.gif" alt="Agent saving a preference, editing it, then recalling the changed answer" class="demo-gif" />
       </div>
@@ -155,7 +157,7 @@
   <section class="section">
     <div class="section-inner">
       <h2 class="section-title">Two interfaces, one wiki</h2>
-      <p class="section-sub">Agents use stdio MCP. Humans use the web UI. Both read and write the same markdown files.</p>
+      <p class="section-sub">Agents use stdio MCP. Humans use the web UI at <code>https://mind-map.local</code>. Both read and write the same markdown files.</p>
       <div class="arch-diagram">
         <div class="arch-row arch-clients">
           <div class="arch-box arch-client">
@@ -186,7 +188,7 @@
           <div class="arch-box arch-server">
             <div class="arch-box-icon">⚙️</div>
             <strong>mind-map</strong>
-            <span>Go binary · Wiki engine · SQLite FTS5 · Page locking</span>
+            <span>Go binary · Wiki engine · SQLite FTS5 · HTTPS · Page locking</span>
           </div>
         </div>
         <div class="arch-arrow">
