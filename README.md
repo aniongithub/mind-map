@@ -38,6 +38,17 @@ Agent: "What do we know about authentication?"
   → ✅ Full page with frontmatter, links, and backlinks
 ```
 
+## Why a wiki?
+
+The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian work well as front-ends, but they're desktop apps that agents can't easily access.
+
+`mind-map` is purpose-built for this pattern:
+
+- **Server-first** — agents access it via MCP, humans via the browser. No desktop app, no GUI required
+- **First-class search** — powered by [SQLite FTS5](https://www.sqlite.org/fts5.html), a production-grade full-text search engine with ranked results and snippets. No vibe-coded search scripts
+- **Wikilinks + backlinks** — `[[target]]` syntax with a maintained backlink index, so the knowledge graph is always navigable
+- **Plain markdown** — your data is `.md` files in a directory. `git diff` them, sync them, move them anywhere
+
 ## Quick Install
 
 ### Linux / macOS
