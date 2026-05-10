@@ -94,6 +94,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "==> Codesigned binary for macOS" || true
 fi
 
+# Linux: allow binding port 80 without root
+if [[ "$(uname -s)" == "Linux" ]] && command -v setcap >/dev/null 2>&1; then
+  sudo setcap cap_net_bind_service=+ep "${INSTALL_DIR}/mind-map" 2>/dev/null && \
+    echo "==> Granted low-port binding capability" || \
+    echo "  Note: Could not set capability. Port 80 may require root."
+fi
+
 echo "==> Installed mind-map to ${INSTALL_DIR}/mind-map"
 
 # Verify
