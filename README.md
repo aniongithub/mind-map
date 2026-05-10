@@ -1,28 +1,35 @@
 # mind-map
 
 [![CI](https://github.com/aniongithub/mind-map/actions/workflows/ci.yml/badge.svg)](https://github.com/aniongithub/mind-map/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-mind--map-blue)](https://www.anionline.me/mind-map)
 
 **A wiki for AI agents — and humans too.**
 
 `mind-map` is a wiki engine that stores pages as plain markdown files, indexes them with SQLite FTS5, and exposes them via MCP (for AI agents) and a REST API with web UI (for humans). One binary, zero runtime dependencies.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/aniongithub/mind-map/gh-pages/screengrabs/mind-map-save-edit-retrieve.gif" alt="mind-map agent demo" width="720">
+</p>
+
+> Works with **GitHub Copilot**, **Claude**, **Cursor**, and any MCP-compatible client.
+
 ## The Problem
 
 AI agents need persistent, structured memory. Today that means:
 
-- **Desktop apps** -- tools like Tolaria require Node.js + Rust + WebKit + a display server just to give agents a knowledge base
-- **No web access** -- the knowledge is locked in a desktop app only the local user can see
-- **Can't deploy headless** -- needs a GUI environment even when no human is looking
+- 🔴 **Desktop apps** — tools like Tolaria require Node.js + Rust + WebKit + a display server just to give agents a knowledge base
+- 🔴 **No web access** — the knowledge is locked in a desktop app only the local user can see
+- 🔴 **Can't deploy headless** — needs a GUI environment even when no human is looking
 
 ## The Solution
 
-`mind-map` is a **server**, not an app. It runs anywhere -- your laptop, a container or a cloud VM.
+`mind-map` is a **server**, not an app. It runs anywhere — your laptop, a container, or a cloud VM.
 
-1. **Agents use stdio** -- `mind-map` with no args starts an MCP server on stdin/stdout
-2. **Humans use the web UI** -- `mind-map serve` starts an HTTP server with REST API and browser UI
-3. **One binary** -- Go, statically compiled, `curl | bash` to install
-4. **Plain markdown** -- pages are `.md` files with YAML frontmatter. Git-friendly, portable, yours
-5. **Multi-process safe** -- SQLite page locking lets multiple agents share the same wiki directory
+1. **Agents use stdio** — `mind-map` with no args starts an MCP server on stdin/stdout
+2. **Humans use the web UI** — `mind-map serve` starts an HTTPS server at `https://mind-map.local`
+3. **One binary** — Go, statically compiled, `curl | bash` to install
+4. **Plain markdown** — pages are `.md` files with YAML frontmatter. Git-friendly, portable, yours
+5. **Multi-process safe** — SQLite page locking lets multiple agents share the same wiki directory
 
 ```
 Agent: "What do we know about authentication?"
@@ -45,6 +52,12 @@ curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/inst
 Invoke-RestMethod https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | Invoke-Expression
 ```
 
+The installer:
+- Downloads the binary and adds it to PATH
+- Adds `127.0.0.1  mind-map.local` to your hosts file
+- Generates a local TLS certificate so `https://mind-map.local` works with no browser warnings
+- Optionally installs mind-map as a persistent system service
+
 Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64**, **windows-x64**, and **windows-arm64**.
 
 ## Architecture
@@ -54,8 +67,8 @@ graph TD
     A[Preact Web App] -->|REST API| B
     C[AI Agent] -->|MCP stdio| D
 
-    subgraph "mind-map serve"
-        B[HTTP Server] --> E[Wiki Engine]
+    subgraph "mind-map serve (HTTPS)"
+        B[HTTPS Server] --> E[Wiki Engine]
     end
 
     subgraph "mind-map (stdio)"
@@ -66,18 +79,18 @@ graph TD
     E -->|read/write| G[Markdown Files]
 ```
 
-The web UI is a static Preact app served by `mind-map serve`. It uses a REST API to read and write pages. AI agents use stdio MCP -- each agent launches its own `mind-map` process.
+The web UI is a static Preact app served by `mind-map serve` over HTTPS. It uses a REST API to read and write pages. AI agents use stdio MCP — each agent launches its own `mind-map` process.
 
 ## Two Modes
 
 | Mode | Command | Use case |
 |------|---------|----------|
 | **stdio** (default) | `mind-map` | AI agents (Copilot, Claude, Cursor) |
-| **HTTP** | `mind-map serve` | Web UI for humans |
+| **HTTPS** | `mind-map serve` | Web UI for humans at `https://mind-map.local` |
 
 Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wiki` by default). Multiple stdio processes can safely share the same wiki via SQLite page locking.
 
-## MCP Tools (8 total)
+## MCP Tools (9 total)
 
 | Tool | Description |
 |------|-------------|
@@ -89,17 +102,16 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | `delete_page` | Delete a page from the wiki and search index |
 | `list_pages` | List pages, optionally filtered by path prefix |
 | `get_backlinks` | Get all pages that link to a given page |
-
 | `register_sync` | Register a wiki path prefix to sync with a git remote |
 
 ## Wiki Features
 
-- **YAML frontmatter** -- structured metadata on every page (`title`, `type`, `status`, custom fields)
-- **Wikilinks** -- `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
-- **Backlink index** -- every page knows what links to it
-- **Full-text search** -- SQLite FTS5 with ranked results and snippets
-- **Multi-process safe** -- SQLite page locking for concurrent agent access
-- **Git sync** -- sync wiki pages to GitHub repo wikis via configurable mappings
+- **YAML frontmatter** — structured metadata on every page (`title`, `type`, `status`, custom fields)
+- **Wikilinks** — `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
+- **Backlink index** — every page knows what links to it
+- **Full-text search** — SQLite FTS5 with ranked results and snippets
+- **Multi-process safe** — SQLite page locking for concurrent agent access
+- **Git sync** — sync wiki pages to GitHub repo wikis via configurable mappings
 
 ## Web UI
 
@@ -112,6 +124,38 @@ The built-in web UI is a metro-inspired, chromeless Preact app:
 - Dark / light theme toggle
 
 The web UI speaks the same language as the wiki engine. If an agent creates a page via stdio, it appears in the browser. If you edit in the browser, the agent sees the change on its next read.
+
+## Service Management
+
+The installer can set up mind-map as a persistent system service that starts on boot:
+
+```bash
+# Install and start the service
+sudo mind-map service install --addr 127.0.0.1:443
+sudo mind-map service start
+
+# Manage
+sudo mind-map service status
+sudo mind-map service stop
+sudo mind-map service uninstall
+```
+
+## TLS Setup
+
+The installer automatically generates a local CA and server certificate so `https://mind-map.local` works without browser warnings. You can also manage certificates manually:
+
+```bash
+# Generate certs (as your user)
+mind-map tls generate
+
+# Install CA in system trust store (requires sudo on Linux)
+sudo mind-map tls install-ca --tls-dir ~/.mind-map/tls
+
+# Remove everything
+mind-map tls remove
+```
+
+On Linux, Chrome uses its own NSS certificate store. The installer handles this automatically if `libnss3-tools` is available.
 
 ## MCP Client Configuration
 
@@ -128,7 +172,7 @@ The web UI speaks the same language as the wiki engine. If an agent creates a pa
 }
 ```
 
-That's it. No args needed -- stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
+That's it. No args needed — stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
 
 ## Page Format
 
@@ -185,7 +229,7 @@ devcontainer exec --workspace-folder . bash -c "go test ./..."
 ### CI/CD
 
 - **Pull Requests** — builds webui, runs `go vet`, `go test` in the devcontainer
-- **Releases** — creating a GitHub release cross-compiles for all 4 platforms and uploads binaries + install scripts
+- **Releases** — creating a GitHub release cross-compiles for all 6 platforms and uploads binaries + install scripts
 
 ## License
 
