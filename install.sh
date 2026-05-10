@@ -108,6 +108,14 @@ if ! grep -q "mind-map\.local" /etc/hosts 2>/dev/null; then
     echo "  Note: Could not update /etc/hosts. Add '127.0.0.1  mind-map.local' manually."
 fi
 
+# Set up TLS so https://mind-map.local works without browser warnings
+echo "==> Setting up TLS certificates..."
+if [[ "$(uname -s)" == "Linux" ]]; then
+  sudo "${INSTALL_DIR}/mind-map" tls setup 2>&1
+else
+  "${INSTALL_DIR}/mind-map" tls setup 2>&1
+fi
+
 echo "==> Installed mind-map to ${INSTALL_DIR}/mind-map"
 
 # Verify
@@ -144,7 +152,7 @@ done
 # Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-DEFAULT_PORT="80"
+DEFAULT_PORT="443"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
 SERVICE_PORT="$DEFAULT_PORT"
 
@@ -231,10 +239,10 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   fi
 
   echo ""
-  if [ "$SERVICE_PORT" = "80" ]; then
-    echo "  Web UI: http://mind-map.local"
+  if [ "$SERVICE_PORT" = "443" ]; then
+    echo "  Web UI: https://mind-map.local"
   else
-    echo "  Web UI: http://mind-map.local:${SERVICE_PORT}"
+    echo "  Web UI: https://mind-map.local:${SERVICE_PORT}"
   fi
   echo ""
   echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"
