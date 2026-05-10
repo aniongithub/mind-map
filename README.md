@@ -15,7 +15,7 @@
 
 ## Why a wiki?
 
-The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian work well as front-ends, but they're desktop apps that agents can't easily access. `mind-map` is purpose-built for this pattern.
+The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian are built with the user in mind, not the agent. `mind-map` puts the agent and the human on equal ground.
 
 | The problem | The solution |
 |---|---|
