@@ -13,23 +13,17 @@
 
 > Works with **GitHub Copilot**, **Claude**, **Cursor**, and any MCP-compatible client.
 
-## The Problem
+## Why a wiki?
 
-AI agents need persistent, structured memory. Today that means:
+The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian work well as front-ends, but they're desktop apps that agents can't easily access. `mind-map` is purpose-built for this pattern.
 
-- 🔴 **Desktop apps** — tools like Tolaria require Node.js + Rust + WebKit + a display server just to give agents a knowledge base
-- 🔴 **No web access** — the knowledge is locked in a desktop app only the local user can see
-- 🔴 **Can't deploy headless** — needs a GUI environment even when no human is looking
-
-## The Solution
-
-`mind-map` is a **server**, not an app. It runs anywhere — your laptop, a container, or a cloud VM.
-
-1. **Agents use stdio** — `mind-map` with no args starts an MCP server on stdin/stdout
-2. **Humans use the web UI** — `mind-map serve` starts an HTTPS server at `https://mind-map.local`
-3. **One binary** — Go, statically compiled, `curl | bash` to install
-4. **Plain markdown** — pages are `.md` files with YAML frontmatter. Git-friendly, portable, yours
-5. **Multi-process safe** — SQLite page locking lets multiple agents share the same wiki directory
+| The problem | The solution |
+|---|---|
+| Desktop apps (Tolaria, Obsidian) need Node.js, Rust, WebKit, or a display server | **Server-first** — one static binary, runs headless, `curl \| bash` to install |
+| Knowledge locked in a desktop app only the local user can see | **Agents use MCP, humans use the browser** at `https://mind-map.local` |
+| Can't deploy headless — needs a GUI even when no human is looking | **Runs anywhere** — laptop, container, cloud VM |
+| Hand-rolled search scripts that break at scale | **First-class search** — [SQLite FTS5](https://www.sqlite.org/fts5.html) with ranked results and snippets |
+| Knowledge re-discovered via RAG on every query | **Persistent wiki** — wikilinks, backlinks, and plain `.md` files that grow over time |
 
 ```
 Agent: "What do we know about authentication?"
@@ -37,17 +31,6 @@ Agent: "What do we know about authentication?"
   → get_page("architecture/auth")
   → ✅ Full page with frontmatter, links, and backlinks
 ```
-
-## Why a wiki?
-
-The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian work well as front-ends, but they're desktop apps that agents can't easily access.
-
-`mind-map` is purpose-built for this pattern:
-
-- **Server-first** — agents access it via MCP, humans via the browser. No desktop app, no GUI required
-- **First-class search** — powered by [SQLite FTS5](https://www.sqlite.org/fts5.html), a production-grade full-text search engine with ranked results and snippets. No vibe-coded search scripts
-- **Wikilinks + backlinks** — `[[target]]` syntax with a maintained backlink index, so the knowledge graph is always navigable
-- **Plain markdown** — your data is `.md` files in a directory. `git diff` them, sync them, move them anywhere
 
 ## Quick Install
 
