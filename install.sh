@@ -117,6 +117,18 @@ echo "==> Setting up TLS certificates..."
 if [[ "$(uname -s)" == "Linux" ]]; then
   sudo "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
     echo "  Note: Could not install CA. Run 'sudo mind-map tls install-ca --tls-dir ${TLS_DIR}' manually."
+  # Also install into Chrome/Chromium NSS database (runs as user, no sudo)
+  if [ -d "${HOME}/.pki/nssdb" ]; then
+    if command -v certutil >/dev/null 2>&1; then
+      certutil -d sql:"${HOME}/.pki/nssdb" -A -t "C,," -n "mind-map Local CA" -i "${TLS_DIR}/ca.crt" 2>/dev/null && \
+        echo "==> CA installed in Chrome/Chromium trust store" || \
+        echo "  Note: Could not install CA in Chrome. Install libnss3-tools and re-run."
+    else
+      echo "  Note: Install libnss3-tools for Chrome to trust the CA:"
+      echo "    sudo apt install libnss3-tools"
+      echo "    certutil -d sql:${HOME}/.pki/nssdb -A -t 'C,,' -n 'mind-map Local CA' -i ${TLS_DIR}/ca.crt"
+    fi
+  fi
 else
   "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
     echo "  Note: Could not install CA. Run 'mind-map tls install-ca' manually."
