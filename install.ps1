@@ -98,6 +98,18 @@ Remove-Item $tarballPath -Force -ErrorAction SilentlyContinue
 
 Write-Ok "Installed to $BinaryPath"
 
+# Add mind-map.local to hosts file for reliable local name resolution
+$hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
+$hostsContent = Get-Content $hostsFile -Raw -ErrorAction SilentlyContinue
+if ($hostsContent -notmatch 'mind-map\.local') {
+    try {
+        Add-Content -Path $hostsFile -Value "`n127.0.0.1  mind-map.local" -ErrorAction Stop
+        Write-Ok "Added mind-map.local to hosts file"
+    } catch {
+        Write-Warn "Could not update hosts file. Add '127.0.0.1  mind-map.local' manually."
+    }
+}
+
 # Verify
 try {
     & $BinaryPath --help | Out-Null
@@ -144,7 +156,6 @@ foreach ($dir in $SkillDirs) {
 $DefaultPort = "80"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $servicePort = $DefaultPort
-$enableMdns = $true
 
 function Test-PortAvailable {
     param([int]$Port)
@@ -162,12 +173,6 @@ Write-Host ""
 $installService = Read-Host "Would you like to install mind-map as a persistent service? [y/N]"
 
 if ($installService -match '^[Yy]$') {
-    # --- mDNS ---
-    $mdnsAnswer = Read-Host "Enable mDNS (advertise as mind-map.local)? [Y/n]"
-    if ($mdnsAnswer -match '^[Nn]$') {
-        $enableMdns = $false
-    }
-
     # --- Port ---
     if (-not (Test-PortAvailable -Port ([int]$DefaultPort))) {
         Write-Warn "Port $DefaultPort is already in use."
@@ -211,9 +216,6 @@ if ($installService -match '^[Yy]$') {
 
     # Build service flags
     $svcFlags = @("--addr", "127.0.0.1:$servicePort", "--dir", "$serviceWikiDir")
-    if (-not $enableMdns) {
-        $svcFlags += "--no-mdns"
-    }
 
     # Uninstall existing service if present (handles reinstall)
     $ErrorActionPreference = "Continue"
@@ -226,11 +228,8 @@ if ($installService -match '^[Yy]$') {
     & $BinaryPath service start @svcFlags
 
     Write-Host ""
-    Write-Host "  Web UI: http://localhost:$servicePort" -ForegroundColor Cyan
-    if ($enableMdns) {
-        $mdnsUrl = if ($servicePort -eq "80") { "http://mind-map.local" } else { "http://mind-map.local:$servicePort" }
-        Write-Host "  mDNS:   $mdnsUrl" -ForegroundColor Cyan
-    }
+    $webUrl = if ($servicePort -eq "80") { "http://mind-map.local" } else { "http://mind-map.local:$servicePort" }
+    Write-Host "  Web UI: $webUrl" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray
 }
