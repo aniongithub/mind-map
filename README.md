@@ -34,7 +34,7 @@ Agent: "What do we know about authentication?"
 
 ## Quick Install
 
-Unlike other wiki knowledge bases, you don't need a tutorial, any system dependencies, or RAM-guzzling UIs. Just copy-paste the command for your OS into a terminal, answer a few questions, and it's up and running — accessible in a browser and via MCP.
+Unlike other wiki knowledge bases, you don't need a tutorial, system dependencies, or RAM-guzzling UIs. Just copy-paste the command for your OS into a terminal and answer a few questions. The installer downloads the binary, sets up HTTPS at `https://mind-map.local`, configures MCP for GitHub Copilot, Claude, Cursor, and VS Code, and installs agent skills — so every AI coding tool on your machine can use mind-map immediately. Zero manual setup.
 
 ### Linux / macOS
 
