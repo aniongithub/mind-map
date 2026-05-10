@@ -161,15 +161,29 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
 
   # --- Port ---
   if ! port_available "$DEFAULT_PORT"; then
-    echo "  Note: Port ${DEFAULT_PORT} is already in use."
+    echo "  Warning: Port ${DEFAULT_PORT} is already in use."
   fi
   while true; do
     if port_available "$DEFAULT_PORT"; then
-      printf "Port [${DEFAULT_PORT}]: "
+      printf "Port [${DEFAULT_PORT}] (enter nothing to auto-pick a free port): "
     else
-      printf "Enter a different port: "
+      printf "Enter a port (or nothing to auto-pick a free port): "
     fi
     read -r SERVICE_PORT < /dev/tty || SERVICE_PORT=""
+    if [[ -z "$SERVICE_PORT" ]] && ! port_available "$DEFAULT_PORT"; then
+      # Auto-pick: scan from 8080 upward
+      for p in $(seq 8080 8180); do
+        if port_available "$p"; then
+          SERVICE_PORT="$p"
+          echo "  Auto-selected port ${SERVICE_PORT}"
+          break
+        fi
+      done
+      if [[ -z "$SERVICE_PORT" ]]; then
+        echo "  Could not find a free port. Please enter one manually."
+        continue
+      fi
+    fi
     SERVICE_PORT="${SERVICE_PORT:-$DEFAULT_PORT}"
     if ! [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]]; then
       echo "  Invalid port number."

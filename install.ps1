@@ -174,9 +174,25 @@ if ($installService -match '^[Yy]$') {
     }
     while ($true) {
         if (Test-PortAvailable -Port ([int]$DefaultPort)) {
-            $servicePort = Read-Host "Port [$DefaultPort]"
+            $servicePort = Read-Host "Port [$DefaultPort] (enter nothing to auto-pick a free port)"
         } else {
-            $servicePort = Read-Host "Enter a different port"
+            $servicePort = Read-Host "Enter a port (or nothing to auto-pick a free port)"
+        }
+        if ([string]::IsNullOrWhiteSpace($servicePort) -and -not (Test-PortAvailable -Port ([int]$DefaultPort))) {
+            # Auto-pick: scan from 8080 upward
+            $found = $false
+            for ($p = 8080; $p -le 8180; $p++) {
+                if (Test-PortAvailable -Port $p) {
+                    $servicePort = "$p"
+                    Write-Ok "Auto-selected port $servicePort"
+                    $found = $true
+                    break
+                }
+            }
+            if (-not $found) {
+                Write-Warn "Could not find a free port. Please enter one manually."
+                continue
+            }
         }
         if ([string]::IsNullOrWhiteSpace($servicePort)) { $servicePort = $DefaultPort }
         if ($servicePort -notmatch '^\d+$') {
