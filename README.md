@@ -15,7 +15,7 @@
 
 ## Why a wiki?
 
-The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian are built with the user in mind, not the agent. `mind-map` puts the agent and the human on equal ground.
+The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian or Tolaria are built with the user in mind, not the agent. `mind-map` puts the agent and the human on equal ground.
 
 | The problem | The solution |
 |---|---|
@@ -34,7 +34,7 @@ Agent: "What do we know about authentication?"
 
 ## Quick Install
 
-Unlike other wiki knowledge bases, you don't need a tutorial, system dependencies, or RAM-guzzling UIs. One command installs everything, ready for you or your agents to use. No tutorials, no bloat. Zero manual setup.
+Unlike other wiki knowledge bases, you don't need a tutorial, system dependencies, or RAM-guzzling UIs. One command installs everything, ready for you or your agents to use. No tutorials, no bloat. Zero manual setup, all batteries included.
 
 ### Linux / macOS
 
@@ -52,7 +52,7 @@ The installer:
 - Downloads the binary and adds it to PATH
 - Adds `127.0.0.1  mind-map.local` to your hosts file
 - Generates a local TLS certificate so `https://mind-map.local` works with no browser warnings
-- Optionally installs mind-map as a persistent system service
+- Installs mind-map as a persistent system service
 
 Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64**, **windows-x64**, and **windows-arm64**.
 
@@ -111,7 +111,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 
 ## Web UI
 
-The built-in web UI is a metro-inspired, chromeless Preact app:
+The built-in web UI is a lightning-fast, Metro-inspired, chromeless Preact app:
 
 - Sidebar with page list and search
 - Markdown rendering with wikilinks as clickable links
