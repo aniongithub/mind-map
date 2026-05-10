@@ -201,7 +201,7 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   SERVICE_WIKI_DIR="${SERVICE_WIKI_DIR:-$DEFAULT_WIKI_DIR}"
 
   # Build service flags
-  SVC_FLAGS=(--addr ":${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}")
+  SVC_FLAGS=(--addr "127.0.0.1:${SERVICE_PORT}" --dir "${SERVICE_WIKI_DIR}")
   if [ "$ENABLE_MDNS" = false ]; then
     SVC_FLAGS+=(--no-mdns)
   fi

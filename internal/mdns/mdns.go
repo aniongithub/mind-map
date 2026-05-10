@@ -71,10 +71,8 @@ func (f *fallbackRegistration) Shutdown() {
 func registerFallback(port int) (Registration, error) {
 	host, _ := os.Hostname()
 
-	ips := localIPs()
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("mdns: no usable network interfaces found")
-	}
+	// Advertise only on loopback — the wiki is personal, not shared.
+	loopback := []net.IP{net.IPv4(127, 0, 0, 1)}
 
 	svc, err := mdns.NewMDNSService(
 		"mind-map",
@@ -82,7 +80,7 @@ func registerFallback(port int) (Registration, error) {
 		"",
 		"mind-map.local.",
 		port,
-		ips,
+		loopback,
 		[]string{fmt.Sprintf("path=/"), fmt.Sprintf("host=%s", host)},
 	)
 	if err != nil {
@@ -127,21 +125,4 @@ func startPublisher(name string, args ...string) (Registration, error) {
 	)
 
 	return &systemRegistration{cmd: cmd}, nil
-}
-
-// localIPs returns all non-loopback IPv4 and IPv6 addresses.
-func localIPs() []net.IP {
-	var ips []net.IP
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil
-	}
-	for _, a := range addrs {
-		ipNet, ok := a.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
-			continue
-		}
-		ips = append(ips, ipNet.IP)
-	}
-	return ips
 }

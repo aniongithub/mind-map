@@ -210,7 +210,7 @@ if ($installService -match '^[Yy]$') {
     if ([string]::IsNullOrWhiteSpace($serviceWikiDir)) { $serviceWikiDir = $DefaultWikiDir }
 
     # Build service flags
-    $svcFlags = @("--addr", ":$servicePort", "--dir", "$serviceWikiDir")
+    $svcFlags = @("--addr", "127.0.0.1:$servicePort", "--dir", "$serviceWikiDir")
     if (-not $enableMdns) {
         $svcFlags += "--no-mdns"
     }

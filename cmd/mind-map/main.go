@@ -80,7 +80,7 @@ var serveCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 
-	serveCmd.Flags().StringP("addr", "a", ":80", "Address to listen on")
+	serveCmd.Flags().StringP("addr", "a", "127.0.0.1:80", "Address to listen on")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
