@@ -5,8 +5,6 @@ import mermaid from 'mermaid';
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
 
-let mermaidCounter = 0;
-
 interface SyncSettings {
     enabled: boolean;
     default: string;
@@ -309,8 +307,9 @@ export function App() {
 
         // Extract mermaid blocks before marked processing to prevent HTML escaping
         const mermaidBlocks: Record<string, string> = {};
+        let localCounter = 0;
         const withPlaceholders = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
-            const id = `mermaid-${++mermaidCounter}`;
+            const id = `mermaid-${++localCounter}`;
             mermaidBlocks[id] = code.trim();
             return `<div class="mermaid" id="${id}">MERMAID_PLACEHOLDER_${id}</div>`;
         });
@@ -523,7 +522,7 @@ export function App() {
                             </div>
                         ) : (
                             <>
-                                <div class="page-body" ref={bodyRef}>
+                                <div class="page-body" ref={bodyRef} key={`${current.path}-${current.modified_at}`}>
                                     <div
                                         class="markdown"
                                         dangerouslySetInnerHTML={{ __html: renderMarkdown(current.body) }}
