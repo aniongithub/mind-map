@@ -3,7 +3,7 @@
 [![CI](https://github.com/aniongithub/mind-map/actions/workflows/ci.yml/badge.svg)](https://github.com/aniongithub/mind-map/actions/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-mind--map-blue)](https://www.anionline.me/mind-map)
 
-**A wiki for AI agents — and humans too.**
+**A wiki for AI agents, and humans too.**
 
 `mind-map` is a wiki engine that stores pages as plain markdown files, indexes them with SQLite FTS5, and exposes them via MCP (for AI agents) and a REST API with web UI (for humans). One binary, zero runtime dependencies.
 
@@ -15,15 +15,15 @@
 
 ## Why a wiki?
 
-The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — where AI agents build and curate a persistent wiki rather than re-discovering answers via RAG — has been gaining traction. Tools like Obsidian or Tolaria are built with the user in mind, not the agent. `mind-map` puts the agent and the human on equal ground.
+The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) has been gaining traction: AI agents that build and curate a persistent wiki rather than re-discovering answers via RAG. Tools like Obsidian or Tolaria are built with the user in mind, not the agent. `mind-map` puts the agent and the human on equal ground.
 
 | The problem | The solution |
 |---|---|
-| Desktop apps (Tolaria, Obsidian) need Node.js, Rust, WebKit, or a display server | **Server-first** — one static binary, runs headless, `curl \| bash` to install |
+| Desktop apps (Tolaria, Obsidian) need Node.js, Rust, WebKit, or a display server | **Server-first**: one static binary, runs headless, `curl \| bash` to install |
 | Knowledge locked in a desktop app only the local user can see | **Agents use MCP, humans use the browser** at `https://mind-map.local` |
-| Can't deploy headless — needs a GUI even when no human is looking | **Runs anywhere** — laptop, container, cloud VM |
-| Hand-rolled search scripts that break at scale | **First-class search** — [SQLite FTS5](https://www.sqlite.org/fts5.html) with ranked results and snippets |
-| Knowledge re-discovered via RAG on every query | **Persistent wiki** — wikilinks, backlinks, and plain `.md` files that grow over time |
+| Can't deploy headless because it needs a GUI even when no human is looking | **Runs anywhere**: laptop, container, cloud VM |
+| Hand-rolled search scripts that break at scale | **First-class search** powered by [SQLite FTS5](https://www.sqlite.org/fts5.html) with ranked results and snippets |
+| Knowledge re-discovered via RAG on every query | **Persistent wiki** with wikilinks, backlinks, and plain `.md` files that grow over time |
 
 ```
 Agent: "What do we know about authentication?"
@@ -75,7 +75,7 @@ graph TD
     E -->|read/write| G[Markdown Files]
 ```
 
-The web UI is a static Preact app served by `mind-map serve` over HTTPS. It uses a REST API to read and write pages. AI agents use stdio MCP — each agent launches its own `mind-map` process.
+The web UI is a static Preact app served by `mind-map serve` over HTTPS. It uses a REST API to read and write pages. AI agents use stdio MCP, with each agent launching its own `mind-map` process.
 
 ## Two Modes
 
@@ -91,7 +91,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | Tool | Description |
 |------|-------------|
 | `search_pages` | Full-text search across page titles and content (SQLite FTS5) |
-| `get_wiki_context` | Wiki overview — page count, top-level directories, recent pages |
+| `get_wiki_context` | Wiki overview: page count, top-level directories, recent pages |
 | `get_page` | Read a page with parsed frontmatter, body, outgoing links, and backlinks |
 | `create_page` | Create a new page (markdown with optional YAML frontmatter) |
 | `update_page` | Update an existing page's content |
@@ -102,12 +102,12 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 
 ## Wiki Features
 
-- **YAML frontmatter** — structured metadata on every page (`title`, `type`, `status`, custom fields)
-- **Wikilinks** — `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
-- **Backlink index** — every page knows what links to it
-- **Full-text search** — SQLite FTS5 with ranked results and snippets
-- **Multi-process safe** — SQLite page locking for concurrent agent access
-- **Git sync** — sync wiki pages to GitHub repo wikis via configurable mappings
+- **YAML frontmatter**: structured metadata on every page (`title`, `type`, `status`, custom fields)
+- **Wikilinks**: `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
+- **Backlink index**: every page knows what links to it
+- **Full-text search**: SQLite FTS5 with ranked results and snippets
+- **Multi-process safe**: SQLite page locking for concurrent agent access
+- **Git sync**: sync wiki pages to GitHub repo wikis via configurable mappings
 
 ## Web UI
 
@@ -155,7 +155,7 @@ On Linux, Chrome uses its own NSS certificate store. The installer handles this 
 
 ## MCP Client Configuration
 
-The installer automatically configures mind-map for GitHub Copilot, Claude, Cursor, and VS Code, and installs agent skills — so this is usually not needed. If you want to configure a client manually:
+The installer automatically configures mind-map for GitHub Copilot, Claude, Cursor, and VS Code, and installs agent skills, so this is usually not needed. If you want to configure a client manually:
 
 ```json
 {
@@ -170,7 +170,7 @@ The installer automatically configures mind-map for GitHub Copilot, Claude, Curs
 }
 ```
 
-No args needed — stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
+No args needed. Stdio mode and `~/.mind-map/wiki` are the defaults. Override the directory with `--dir` if needed.
 
 ## Page Format
 
@@ -196,25 +196,25 @@ The wiki engine extracts:
 
 ## Development
 
-Development happens inside a [dev container](https://containers.dev/) — a reproducible, containerized environment defined by `.devcontainer/devcontainer.json`. This means no local Go or Node install required; everything runs in the container.
+Development happens inside a [dev container](https://containers.dev/), a reproducible, containerized environment defined by `.devcontainer/devcontainer.json`. This means no local Go or Node install required; everything runs in the container.
 
 You can manage the devcontainer with VS Code, [devcontainer-mcp](https://www.anionline.me/devcontainer-mcp/), or the [devcontainer CLI](https://github.com/devcontainers/cli).
 
 ### VS Code (recommended)
 
-Open the repo in VS Code — it will prompt to reopen in the devcontainer. Or clone directly into one:
+Open the repo in VS Code. It will prompt to reopen in the devcontainer. Or clone directly into one:
 
 > `Ctrl+Shift+P` → **Dev Containers: Clone Repository in Container Volume**
 
 Once inside, everything is ready:
 
-- **`Ctrl+Shift+B`** — build webui (default build task)
-- **`F5`** with **`mind-map + WebUI`** — starts the Go server + opens Chrome
-- **`watch-webui`** task — webpack watch for live reload
+- **`Ctrl+Shift+B`**: build webui (default build task)
+- **`F5`** with **`mind-map + WebUI`**: starts the Go server + opens Chrome
+- **`watch-webui`** task: webpack watch for live reload
 
 ### devcontainer-mcp
 
-If you use AI coding agents, [devcontainer-mcp](https://www.anionline.me/devcontainer-mcp/) lets the agent spin up and work inside the container directly — no manual setup.
+If you use AI coding agents, [devcontainer-mcp](https://www.anionline.me/devcontainer-mcp/) lets the agent spin up and work inside the container directly, no manual setup.
 
 ### CLI
 
@@ -226,8 +226,8 @@ devcontainer exec --workspace-folder . bash -c "go test ./..."
 
 ### CI/CD
 
-- **Pull Requests** — builds webui, runs `go vet`, `go test` in the devcontainer
-- **Releases** — creating a GitHub release cross-compiles for all 6 platforms and uploads binaries + install scripts
+- **Pull Requests**: builds webui, runs `go vet`, `go test` in the devcontainer
+- **Releases**: creating a GitHub release cross-compiles for all 6 platforms and uploads binaries + install scripts
 
 ## License
 
