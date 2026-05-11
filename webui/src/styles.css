@@ -51,6 +51,13 @@ html, body, #root {
     flex-direction: column;
     flex-shrink: 0;
     overflow-y: auto;
+    position: relative;
+    transition: width 0.15s ease;
+}
+
+.sidebar.collapsed {
+    width: 48px;
+    overflow: hidden;
 }
 
 .sidebar-header {
@@ -58,6 +65,48 @@ html, body, #root {
     font-size: 20px;
     font-weight: 200;
     letter-spacing: -0.5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sidebar.collapsed .sidebar-header {
+    padding: 24px 8px 8px;
+    justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-header-text {
+    display: none;
+}
+
+.sidebar-collapse-btn {
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 6px;
+    flex-shrink: 0;
+}
+
+.sidebar-collapse-btn:hover {
+    color: var(--fg);
+}
+
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+}
+
+.sidebar-resize-handle:hover {
+    background: var(--accent);
+    opacity: 0.4;
 }
 
 .sidebar-search {
@@ -74,6 +123,34 @@ html, body, #root {
     font-family: var(--font);
     font-size: 13px;
     outline: none;
+}
+
+.search-wrapper {
+    display: flex;
+    align-items: stretch;
+}
+
+.search-wrapper input {
+    flex: 1;
+    min-width: 0;
+    border-right: none;
+}
+
+.sort-toggle {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+}
+
+.sort-toggle:hover {
+    color: var(--fg);
+    background: var(--tile-bg);
 }
 
 .sidebar-search input:focus {
@@ -134,6 +211,24 @@ html, body, #root {
     font-size: 36px;
     font-weight: 200;
     letter-spacing: -1px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.edit-icon-btn {
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s;
+}
+
+.edit-icon-btn:hover {
+    color: var(--accent);
 }
 
 .page-meta {
@@ -191,6 +286,26 @@ html, body, #root {
     border-top: 1px solid var(--border);
     margin: 20px 0;
 }
+.markdown table {
+    border-collapse: collapse;
+    width: auto;
+    margin: 12px 0;
+    font-size: 14px;
+}
+.markdown th {
+    text-align: left;
+    font-weight: 600;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    background: var(--tile-bg);
+}
+.markdown td {
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+}
+.markdown tr:hover td {
+    background: var(--tile-bg);
+}
 
 /* --- Backlinks --- */
 
@@ -206,6 +321,19 @@ html, body, #root {
     letter-spacing: 1px;
     color: var(--fg-dim);
     margin-bottom: 8px;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.backlinks-title:hover {
+    color: var(--fg-muted);
+}
+
+.backlinks-toggle {
+    font-size: 9px;
 }
 
 .backlink-item {

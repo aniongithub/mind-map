@@ -5,8 +5,6 @@ import mermaid from 'mermaid';
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
 
-let mermaidCounter = 0;
-
 interface SyncSettings {
     enabled: boolean;
     default: string;
@@ -59,20 +57,124 @@ export function App() {
         return window.matchMedia('(prefers-color-scheme: dark)').matches;
     });
 
+    // Sidebar resize/collapse state
+    const [sidebarWidth, setSidebarWidth] = useState(() => {
+        const saved = localStorage.getItem('mm-sidebar-width');
+        return saved ? parseInt(saved, 10) : 240;
+    });
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+        return localStorage.getItem('mm-sidebar-collapsed') === 'true';
+    });
+    const isResizing = useRef(false);
+
+    useEffect(() => {
+        localStorage.setItem('mm-sidebar-width', String(sidebarWidth));
+    }, [sidebarWidth]);
+
+    useEffect(() => {
+        localStorage.setItem('mm-sidebar-collapsed', String(sidebarCollapsed));
+    }, [sidebarCollapsed]);
+
+    const startResize = (e: MouseEvent) => {
+        e.preventDefault();
+        isResizing.current = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (ev: MouseEvent) => {
+            if (!isResizing.current) return;
+            const newWidth = Math.max(160, Math.min(480, ev.clientX));
+            setSidebarWidth(newWidth);
+        };
+        const onMouseUp = () => {
+            isResizing.current = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    };
+
+    // Backlinks collapse state
+    const [backlinksCollapsed, setBacklinksCollapsed] = useState(() => {
+        return localStorage.getItem('mm-backlinks-collapsed') === 'true';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('mm-backlinks-collapsed', String(backlinksCollapsed));
+    }, [backlinksCollapsed]);
+
+    // Sort mode: 'recent' | 'path' | 'title'
+    type SortMode = 'recent' | 'path' | 'title';
+    const sortModes: SortMode[] = ['recent', 'path', 'title'];
+    const sortLabels: Record<SortMode, string> = { recent: 'Recent', path: 'A→Z path', title: 'A→Z title' };
+
+    const SortIcon = ({ mode }: { mode: SortMode }) => {
+        const props = { width: 16, height: 16, fill: 'currentColor', viewBox: '' as string };
+        switch (mode) {
+            case 'recent':
+                return <svg {...props} viewBox="-5 -10 110 110"><path d="m54.871 6.9883c-1.5664 0-3.1367 0.066407-4.707 0.18359-4.1836 0.39453-8.3438 1.418-12.355 3.082-13.742 5.6992-23.395 18.035-25.883 32.383l-2.543-2.8828-2.0234-2.2969-4.5781 4.0508 2.0117 2.2969 9.1406 10.344 11.043-8.3711 2.4375-1.8477-3.6875-4.8711-2.4375 1.8438-3.2891 2.4961c2.2109-12.195 10.449-22.637 22.156-27.492 13.777-5.7148 29.605-2.5625 40.152 7.9961 10.543 10.562 13.688 26.43 7.9805 40.227-5.707 13.801-19.125 22.777-34.035 22.777h-3.0586v6.1133h3.0586c17.371 0 33.055-10.492 39.703-26.559 6.6445-16.066 2.9688-34.582-9.3125-46.883-8.0586-8.0703-18.805-12.43-29.77-12.594zm-0.61328 19.598c-12.879 0-23.383 10.531-23.383 23.426s10.504 23.41 23.383 23.41c12.879 0 23.383-10.516 23.383-23.41s-10.504-23.426-23.383-23.426zm-1.7266 10.449h6.1133v11.184l2.9141 4.1914 1.7422 2.5156-5.0312 3.4805-1.7422-2.5156-3.9961-5.7656z"/></svg>;
+            case 'path':
+                return <svg {...props} viewBox="26 -26 100 100"><path fill-rule="evenodd" clip-rule="evenodd" d="M114.9,5.7c-1.4,1.5-3.7,1.5-5.1,0L100.5-4v64.5c0,2-1.6,3.6-3.6,3.6s-3.6-1.6-3.6-3.6V-4l-9.3,9.7  c-1.4,1.5-3.7,1.5-5.1,0c-1.4-1.5-1.4-3.9,0-5.4l15.1-15.9c0,0,0,0,0.1-0.1l0.2-0.2c0,0,0,0,0,0c0.6-0.7,1.5-1.1,2.5-1.1  c1,0,1.9,0.4,2.6,1.1c0,0,0,0,0,0c0,0,0,0,0,0c0,0,0,0,0,0l15.4,16.2C116.3,1.8,116.3,4.2,114.9,5.7z M56.9,62.6  C56.9,62.6,56.9,62.6,56.9,62.6l-0.3,0.3c0,0,0,0,0,0c-0.6,0.7-1.5,1.1-2.5,1.1c-1,0-1.9-0.4-2.6-1.1c0,0,0,0,0,0c0,0,0,0,0,0  c0,0,0,0,0,0L36.1,46.7c-1.4-1.5-1.4-3.9,0-5.4c1.4-1.5,3.7-1.5,5.1,0l9.3,9.7v-64.5c0-2,1.6-3.6,3.6-3.6c2,0,3.6,1.6,3.6,3.6V51  l9.3-9.7c1.4-1.5,3.7-1.5,5.1,0c1.4,1.5,1.4,3.9,0,5.4L56.9,62.6z"/></svg>;
+            case 'title':
+                return <svg {...props} viewBox="0 0 100 96"><path d="M26.672,17.764C26.14,16.116,24.604,15,22.868,15c-1.732,0-3.264,1.116-3.8,2.756l-18.872,58  c-0.68,2.096,0.468,4.36,2.572,5.049C3.18,80.936,3.596,81,4.008,81c1.684,0,3.252-1.072,3.804-2.756L12.12,65h21.508l4.304,13.236  c0.684,2.1,2.932,3.252,5.04,2.576c2.096-0.681,3.248-2.937,2.568-5.045L26.672,17.764z M14.712,57l8.156-25.072L31.02,57H14.712z"/><path d="M95.8,73H64.973L99.1,23.264c0.84-1.232,0.928-2.82,0.24-4.132S97.284,17,95.8,17h-32c-2.208,0-4,1.788-4,4s1.792,4,4,4  h24.408L54.08,74.736c-0.84,1.231-0.932,2.812-0.248,4.123C54.527,80.18,55.893,81,57.376,81H95.8c2.212,0,4-1.788,4-4  S98,73,95.8,73L95.8,73z"/><path d="M58.584,55.624l8-7.756c0.768-0.752,1.216-1.792,1.216-2.88c0-1.084-0.436-2.112-1.216-2.876l-8-7.752  c-1.588-1.54-4.12-1.5-5.656,0.088c-1.539,1.584-1.496,4.112,0.084,5.656l0.916,0.88H43.804c-2.208,0-4,1.788-4,4s1.792,4,4,4  h10.124l-0.916,0.875c-1.584,1.541-1.623,4.072-0.084,5.66c0.78,0.813,1.828,1.225,2.872,1.225  C56.8,56.752,57.809,56.376,58.584,55.624z"/></svg>;
+        }
+    };
+
+    const [sortMode, setSortMode] = useState<SortMode>(() => {
+        const saved = localStorage.getItem('mm-sort-mode');
+        return (saved === 'path' || saved === 'title') ? saved : 'recent';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('mm-sort-mode', sortMode);
+    }, [sortMode]);
+
+    const cycleSortMode = () => {
+        const idx = sortModes.indexOf(sortMode);
+        setSortMode(sortModes[(idx + 1) % sortModes.length]);
+    };
+
+    const sortPages = (list: Page[]): Page[] => {
+        const sorted = [...list];
+        switch (sortMode) {
+            case 'path':
+                sorted.sort((a, b) => a.path.localeCompare(b.path));
+                break;
+            case 'title':
+                sorted.sort((a, b) => (a.title || a.path).localeCompare(b.title || b.path));
+                break;
+            case 'recent':
+            default:
+                // API already returns modified DESC; preserve that order
+                break;
+        }
+        return sorted;
+    };
+
     useEffect(() => {
         document.documentElement.classList.toggle('dark', isDark);
         localStorage.setItem('mm-theme', isDark ? 'dark' : 'light');
     }, [isDark]);
 
     // Load page list
+    const [rawPages, setRawPages] = useState<Page[]>([]);
+
     const loadPages = async () => {
         try {
             const list = await api.listPages();
-            setPages(list);
+            setRawPages(list);
         } catch (e) {
             console.error('Failed to load pages:', e);
         }
     };
+
+    // Re-sort whenever rawPages or sortMode changes
+    useEffect(() => {
+        setPages(sortPages(rawPages));
+    }, [rawPages, sortMode]);
 
     useEffect(() => { loadPages(); }, []);
 
@@ -144,7 +246,7 @@ export function App() {
         }
         try {
             const results = await api.searchPages(searchQuery);
-            setPages(results.map(r => ({ path: r.path, title: r.title, body: '', modified_at: '' })));
+            setRawPages(results.map(r => ({ path: r.path, title: r.title, body: '', modified_at: '' })));
         } catch (e) {
             console.error('Search failed:', e);
         }
@@ -205,8 +307,9 @@ export function App() {
 
         // Extract mermaid blocks before marked processing to prevent HTML escaping
         const mermaidBlocks: Record<string, string> = {};
+        let localCounter = 0;
         const withPlaceholders = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
-            const id = `mermaid-${++mermaidCounter}`;
+            const id = `mermaid-${++localCounter}`;
             mermaidBlocks[id] = code.trim();
             return `<div class="mermaid" id="${id}">MERMAID_PLACEHOLDER_${id}</div>`;
         });
@@ -243,40 +346,68 @@ export function App() {
     return (
         <div class="app">
             {/* Sidebar */}
-            <div class="sidebar">
-                <div class="sidebar-header">mind-map</div>
-                <div class="sidebar-search">
-                    <input
-                        type="text"
-                        placeholder="search..."
-                        value={searchQuery}
-                        onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                    />
+            <div
+                class={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+                style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
+            >
+                <div class="sidebar-header">
+                    <span class="sidebar-header-text">mind-map</span>
+                    <button
+                        class="sidebar-collapse-btn"
+                        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                        title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                    >
+                        {sidebarCollapsed ? '\u25B6' : '\u25C0'}
+                    </button>
                 </div>
-                <ul class="page-list">
-                    {pages.map(p => (
-                        <li
-                            key={p.path}
-                            class={`page-item ${current?.path === p.path ? 'active' : ''}`}
-                            onClick={() => navigate(p.path)}
-                        >
-                            <div class="page-item-title">{p.title || p.path}</div>
-                            <div class="page-item-path">{p.path}</div>
-                        </li>
-                    ))}
-                </ul>
-                <div class="status-bar">
-                    <span>{pageCount} pages</span>
-                    <div class="status-bar-left">
-                        <button class="settings-toggle" onClick={openSettings} title="Settings">
-                            &#9881;
-                        </button>
-                        <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
-                            {isDark ? '\u2600' : '\u263E'}
-                        </button>
-                    </div>
-                </div>
+                {!sidebarCollapsed && (
+                    <>
+                        <div class="sidebar-search">
+                            <div class="search-wrapper">
+                                <input
+                                    type="text"
+                                    placeholder="search..."
+                                    value={searchQuery}
+                                    onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                />
+                                <button
+                                    class="sort-toggle"
+                                    onClick={cycleSortMode}
+                                    title={`Sort: ${sortLabels[sortMode]}`}
+                                >
+                                    <SortIcon mode={sortMode} />
+                                </button>
+                            </div>
+                        </div>
+                        <ul class="page-list">
+                            {pages.map(p => (
+                                <li
+                                    key={p.path}
+                                    class={`page-item ${current?.path === p.path ? 'active' : ''}`}
+                                    onClick={() => navigate(p.path)}
+                                >
+                                    <div class="page-item-title">{p.title || p.path}</div>
+                                    <div class="page-item-path">{p.path}</div>
+                                </li>
+                            ))}
+                        </ul>
+                        <div class="status-bar">
+                            <span>{pageCount} pages</span>
+                            <div class="status-bar-left">
+                                <button class="settings-toggle" onClick={openSettings} title="Settings">
+                                    &#9881;
+                                </button>
+                                <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
+                                    {isDark ? '\u2600' : '\u263E'}
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+                {!sidebarCollapsed && (
+                    <div class="sidebar-resize-handle" onMouseDown={startResize} />
+                )}
             </div>
 
             {/* Main */}
@@ -361,7 +492,14 @@ export function App() {
                 ) : current ? (
                     <>
                         <div class="page-header">
-                            <div class="page-title">{current.title}</div>
+                            <div class="page-title">
+                                {current.title}
+                                {!editing && (
+                                    <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
+                                    </button>
+                                )}
+                            </div>
                             <div class="page-meta">
                                 <span>{current.path}</span>
                                 {current.modified_at && <span>{new Date(current.modified_at).toLocaleDateString()}</span>}
@@ -370,13 +508,11 @@ export function App() {
                                 )}
                             </div>
                             <div class="page-actions">
-                                {editing ? (
+                                {editing && (
                                     <>
                                         <button class="btn primary" onClick={handleSave}>save</button>
                                         <button class="btn" onClick={() => setEditing(false)}>cancel</button>
                                     </>
-                                ) : (
-                                    <button class="btn" onClick={handleEdit}>edit</button>
                                 )}
                             </div>
                         </div>
@@ -391,7 +527,7 @@ export function App() {
                             </div>
                         ) : (
                             <>
-                                <div class="page-body" ref={bodyRef}>
+                                <div class="page-body" ref={bodyRef} key={`${current.path}-${current.modified_at}`}>
                                     <div
                                         class="markdown"
                                         dangerouslySetInnerHTML={{ __html: renderMarkdown(current.body) }}
@@ -399,8 +535,14 @@ export function App() {
                                 </div>
                                 {current.backlinks && current.backlinks.length > 0 && (
                                     <div class="backlinks">
-                                        <div class="backlinks-title">Linked from</div>
-                                        {current.backlinks.map(bl => (
+                                        <div
+                                            class="backlinks-title"
+                                            onClick={() => setBacklinksCollapsed(!backlinksCollapsed)}
+                                        >
+                                            <span class="backlinks-toggle">{backlinksCollapsed ? '\u25B6' : '\u25BC'}</span>
+                                            Linked from ({current.backlinks.length})
+                                        </div>
+                                        {!backlinksCollapsed && current.backlinks.map(bl => (
                                             <div key={bl} class="backlink-item" onClick={() => navigate(bl)}>
                                                 {bl}
                                             </div>
