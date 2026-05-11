@@ -108,20 +108,64 @@ export function App() {
         localStorage.setItem('mm-backlinks-collapsed', String(backlinksCollapsed));
     }, [backlinksCollapsed]);
 
+    // Sort mode: 'recent' | 'path' | 'title'
+    type SortMode = 'recent' | 'path' | 'title';
+    const sortModes: SortMode[] = ['recent', 'path', 'title'];
+    const sortLabels: Record<SortMode, string> = { recent: 'Recent', path: 'A→Z path', title: 'A→Z title' };
+    const sortIcons: Record<SortMode, string> = { recent: '🕑', path: '📂', title: '🔤' };
+
+    const [sortMode, setSortMode] = useState<SortMode>(() => {
+        const saved = localStorage.getItem('mm-sort-mode');
+        return (saved === 'path' || saved === 'title') ? saved : 'recent';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('mm-sort-mode', sortMode);
+    }, [sortMode]);
+
+    const cycleSortMode = () => {
+        const idx = sortModes.indexOf(sortMode);
+        setSortMode(sortModes[(idx + 1) % sortModes.length]);
+    };
+
+    const sortPages = (list: Page[]): Page[] => {
+        const sorted = [...list];
+        switch (sortMode) {
+            case 'path':
+                sorted.sort((a, b) => a.path.localeCompare(b.path));
+                break;
+            case 'title':
+                sorted.sort((a, b) => (a.title || a.path).localeCompare(b.title || b.path));
+                break;
+            case 'recent':
+            default:
+                // API already returns modified DESC; preserve that order
+                break;
+        }
+        return sorted;
+    };
+
     useEffect(() => {
         document.documentElement.classList.toggle('dark', isDark);
         localStorage.setItem('mm-theme', isDark ? 'dark' : 'light');
     }, [isDark]);
 
     // Load page list
+    const [rawPages, setRawPages] = useState<Page[]>([]);
+
     const loadPages = async () => {
         try {
             const list = await api.listPages();
-            setPages(list);
+            setRawPages(list);
         } catch (e) {
             console.error('Failed to load pages:', e);
         }
     };
+
+    // Re-sort whenever rawPages or sortMode changes
+    useEffect(() => {
+        setPages(sortPages(rawPages));
+    }, [rawPages, sortMode]);
 
     useEffect(() => { loadPages(); }, []);
 
@@ -193,7 +237,7 @@ export function App() {
         }
         try {
             const results = await api.searchPages(searchQuery);
-            setPages(results.map(r => ({ path: r.path, title: r.title, body: '', modified_at: '' })));
+            setRawPages(results.map(r => ({ path: r.path, title: r.title, body: '', modified_at: '' })));
         } catch (e) {
             console.error('Search failed:', e);
         }
@@ -309,13 +353,22 @@ export function App() {
                 {!sidebarCollapsed && (
                     <>
                         <div class="sidebar-search">
-                            <input
-                                type="text"
-                                placeholder="search..."
-                                value={searchQuery}
-                                onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                            />
+                            <div class="search-wrapper">
+                                <input
+                                    type="text"
+                                    placeholder="search..."
+                                    value={searchQuery}
+                                    onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                />
+                                <button
+                                    class="sort-toggle"
+                                    onClick={cycleSortMode}
+                                    title={`Sort: ${sortLabels[sortMode]}`}
+                                >
+                                    {sortIcons[sortMode]}
+                                </button>
+                            </div>
                         </div>
                         <ul class="page-list">
                             {pages.map(p => (

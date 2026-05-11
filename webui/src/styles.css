@@ -125,6 +125,34 @@ html, body, #root {
     outline: none;
 }
 
+.search-wrapper {
+    display: flex;
+    align-items: stretch;
+}
+
+.search-wrapper input {
+    flex: 1;
+    min-width: 0;
+    border-right: none;
+}
+
+.sort-toggle {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+}
+
+.sort-toggle:hover {
+    color: var(--fg);
+    background: var(--tile-bg);
+}
+
 .sidebar-search input:focus {
     border-color: var(--accent);
 }
