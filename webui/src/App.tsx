@@ -59,6 +59,55 @@ export function App() {
         return window.matchMedia('(prefers-color-scheme: dark)').matches;
     });
 
+    // Sidebar resize/collapse state
+    const [sidebarWidth, setSidebarWidth] = useState(() => {
+        const saved = localStorage.getItem('mm-sidebar-width');
+        return saved ? parseInt(saved, 10) : 240;
+    });
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+        return localStorage.getItem('mm-sidebar-collapsed') === 'true';
+    });
+    const isResizing = useRef(false);
+
+    useEffect(() => {
+        localStorage.setItem('mm-sidebar-width', String(sidebarWidth));
+    }, [sidebarWidth]);
+
+    useEffect(() => {
+        localStorage.setItem('mm-sidebar-collapsed', String(sidebarCollapsed));
+    }, [sidebarCollapsed]);
+
+    const startResize = (e: MouseEvent) => {
+        e.preventDefault();
+        isResizing.current = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (ev: MouseEvent) => {
+            if (!isResizing.current) return;
+            const newWidth = Math.max(160, Math.min(480, ev.clientX));
+            setSidebarWidth(newWidth);
+        };
+        const onMouseUp = () => {
+            isResizing.current = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    };
+
+    // Backlinks collapse state
+    const [backlinksCollapsed, setBacklinksCollapsed] = useState(() => {
+        return localStorage.getItem('mm-backlinks-collapsed') === 'true';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('mm-backlinks-collapsed', String(backlinksCollapsed));
+    }, [backlinksCollapsed]);
+
     useEffect(() => {
         document.documentElement.classList.toggle('dark', isDark);
         localStorage.setItem('mm-theme', isDark ? 'dark' : 'light');
@@ -243,40 +292,59 @@ export function App() {
     return (
         <div class="app">
             {/* Sidebar */}
-            <div class="sidebar">
-                <div class="sidebar-header">mind-map</div>
-                <div class="sidebar-search">
-                    <input
-                        type="text"
-                        placeholder="search..."
-                        value={searchQuery}
-                        onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                    />
+            <div
+                class={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}
+                style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
+            >
+                <div class="sidebar-header">
+                    <span class="sidebar-header-text">mind-map</span>
+                    <button
+                        class="sidebar-collapse-btn"
+                        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                        title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                    >
+                        {sidebarCollapsed ? '\u25B6' : '\u25C0'}
+                    </button>
                 </div>
-                <ul class="page-list">
-                    {pages.map(p => (
-                        <li
-                            key={p.path}
-                            class={`page-item ${current?.path === p.path ? 'active' : ''}`}
-                            onClick={() => navigate(p.path)}
-                        >
-                            <div class="page-item-title">{p.title || p.path}</div>
-                            <div class="page-item-path">{p.path}</div>
-                        </li>
-                    ))}
-                </ul>
-                <div class="status-bar">
-                    <span>{pageCount} pages</span>
-                    <div class="status-bar-left">
-                        <button class="settings-toggle" onClick={openSettings} title="Settings">
-                            &#9881;
-                        </button>
-                        <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
-                            {isDark ? '\u2600' : '\u263E'}
-                        </button>
-                    </div>
-                </div>
+                {!sidebarCollapsed && (
+                    <>
+                        <div class="sidebar-search">
+                            <input
+                                type="text"
+                                placeholder="search..."
+                                value={searchQuery}
+                                onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                            />
+                        </div>
+                        <ul class="page-list">
+                            {pages.map(p => (
+                                <li
+                                    key={p.path}
+                                    class={`page-item ${current?.path === p.path ? 'active' : ''}`}
+                                    onClick={() => navigate(p.path)}
+                                >
+                                    <div class="page-item-title">{p.title || p.path}</div>
+                                    <div class="page-item-path">{p.path}</div>
+                                </li>
+                            ))}
+                        </ul>
+                        <div class="status-bar">
+                            <span>{pageCount} pages</span>
+                            <div class="status-bar-left">
+                                <button class="settings-toggle" onClick={openSettings} title="Settings">
+                                    &#9881;
+                                </button>
+                                <button class="theme-toggle" onClick={() => setIsDark(!isDark)}>
+                                    {isDark ? '\u2600' : '\u263E'}
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+                {!sidebarCollapsed && (
+                    <div class="sidebar-resize-handle" onMouseDown={startResize} />
+                )}
             </div>
 
             {/* Main */}
@@ -399,8 +467,14 @@ export function App() {
                                 </div>
                                 {current.backlinks && current.backlinks.length > 0 && (
                                     <div class="backlinks">
-                                        <div class="backlinks-title">Linked from</div>
-                                        {current.backlinks.map(bl => (
+                                        <div
+                                            class="backlinks-title"
+                                            onClick={() => setBacklinksCollapsed(!backlinksCollapsed)}
+                                        >
+                                            <span class="backlinks-toggle">{backlinksCollapsed ? '\u25B6' : '\u25BC'}</span>
+                                            Linked from ({current.backlinks.length})
+                                        </div>
+                                        {!backlinksCollapsed && current.backlinks.map(bl => (
                                             <div key={bl} class="backlink-item" onClick={() => navigate(bl)}>
                                                 {bl}
                                             </div>
