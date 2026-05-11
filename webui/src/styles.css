@@ -211,6 +211,24 @@ html, body, #root {
     font-size: 36px;
     font-weight: 200;
     letter-spacing: -1px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.edit-icon-btn {
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s;
+}
+
+.edit-icon-btn:hover {
+    color: var(--accent);
 }
 
 .page-meta {

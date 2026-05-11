@@ -492,7 +492,14 @@ export function App() {
                 ) : current ? (
                     <>
                         <div class="page-header">
-                            <div class="page-title">{current.title}</div>
+                            <div class="page-title">
+                                {current.title}
+                                {!editing && (
+                                    <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
+                                    </button>
+                                )}
+                            </div>
                             <div class="page-meta">
                                 <span>{current.path}</span>
                                 {current.modified_at && <span>{new Date(current.modified_at).toLocaleDateString()}</span>}
@@ -501,13 +508,11 @@ export function App() {
                                 )}
                             </div>
                             <div class="page-actions">
-                                {editing ? (
+                                {editing && (
                                     <>
                                         <button class="btn primary" onClick={handleSave}>save</button>
                                         <button class="btn" onClick={() => setEditing(false)}>cancel</button>
                                     </>
-                                ) : (
-                                    <button class="btn" onClick={handleEdit}>edit</button>
                                 )}
                             </div>
                         </div>
