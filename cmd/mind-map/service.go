@@ -172,7 +172,7 @@ var serviceStartCmd = &cobra.Command{
 		}
 		fmt.Println("Service started.")
 		scheme := "http"
-		if mindtls.HasCerts(mindtls.DefaultDir()) {
+		if mindtls.HasCerts(mindtls.DirFromWikiDir(dir)) {
 			scheme = "https"
 		}
 		fmt.Printf("  Web UI:       %s://%s\n", scheme, addr)
