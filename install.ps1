@@ -98,22 +98,6 @@ Remove-Item $tarballPath -Force -ErrorAction SilentlyContinue
 
 Write-Ok "Installed to $BinaryPath"
 
-# Add mind-map.local to hosts file for reliable local name resolution
-$hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
-$hostsContent = Get-Content $hostsFile -Raw -ErrorAction SilentlyContinue
-if ($hostsContent -notmatch 'mind-map\.local') {
-    try {
-        Add-Content -Path $hostsFile -Value "`n127.0.0.1  mind-map.local" -ErrorAction Stop
-        Write-Ok "Added mind-map.local to hosts file"
-    } catch {
-        Write-Warn "Could not update hosts file. Add '127.0.0.1  mind-map.local' manually."
-    }
-}
-
-# Set up TLS so https://mind-map.local works without browser warnings
-Write-Step "Setting up TLS certificates..."
-& $BinaryPath tls setup
-
 # Verify
 try {
     & $BinaryPath --help | Out-Null
@@ -157,7 +141,7 @@ foreach ($dir in $SkillDirs) {
 # 6. Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-$DefaultPort = "443"
+$DefaultPort = "4242"
 $DefaultWikiDir = "$env:ProgramData\mind-map\wiki"
 $servicePort = $DefaultPort
 
@@ -232,7 +216,7 @@ if ($installService -match '^[Yy]$') {
     & $BinaryPath service start @svcFlags
 
     Write-Host ""
-    $webUrl = if ($servicePort -eq "443") { "https://mind-map.local" } else { "https://mind-map.local:$servicePort" }
+    $webUrl = "http://localhost:$servicePort"
     Write-Host "  Web UI: $webUrl" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Manage with:  mind-map service status|stop|start|uninstall" -ForegroundColor DarkGray

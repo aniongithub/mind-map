@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/logging"
-	mindtls "github.com/aniongithub/mind-map/internal/tls"
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )
@@ -114,7 +113,7 @@ var serviceCmd = &cobra.Command{
 func init() {
 	// Shared flags for service subcommands that need them
 	for _, cmd := range []*cobra.Command{serviceInstallCmd, serviceStartCmd, serviceStopCmd, serviceUninstallCmd, serviceStatusCmd} {
-		cmd.Flags().StringP("addr", "a", "127.0.0.1:443", "Address to listen on")
+		cmd.Flags().StringP("addr", "a", "127.0.0.1:4242", "Address to listen on")
 		cmd.Flags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 		cmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded)")
 		cmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
@@ -171,12 +170,8 @@ var serviceStartCmd = &cobra.Command{
 			return fmt.Errorf("start service: %w", err)
 		}
 		fmt.Println("Service started.")
-		scheme := "http"
-		if mindtls.HasCerts(mindtls.DirFromWikiDir(dir)) {
-			scheme = "https"
-		}
-		fmt.Printf("  Web UI:       %s://%s\n", scheme, addr)
-		fmt.Printf("  MCP endpoint: %s://%s/mcp\n", scheme, addr)
+		fmt.Printf("  Web UI:       http://%s\n", addr)
+		fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
 		return nil
 	},
 }

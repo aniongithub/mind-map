@@ -20,7 +20,7 @@ The idea of [LLM-maintained knowledge bases](https://gist.github.com/karpathy/44
 | The problem | The solution |
 |---|---|
 | Desktop apps (Tolaria, Obsidian) need Node.js, Rust, WebKit, or a display server | **Server-first**: one static binary, runs headless, `curl \| bash` to install |
-| Knowledge locked in a desktop app only the local user can see | **Agents use MCP, humans use the browser** at `https://mind-map.local` |
+| Knowledge locked in a desktop app only the local user can see | **Agents use MCP, humans use the browser** at `http://localhost:4242` |
 | Can't deploy headless because it needs a GUI even when no human is looking | **Runs anywhere**: laptop, container, cloud VM |
 | Hand-rolled search scripts that break at scale | **First-class search** powered by [SQLite FTS5](https://www.sqlite.org/fts5.html) with ranked results and snippets |
 | Knowledge re-discovered via RAG on every query | **Persistent wiki** with wikilinks, backlinks, and plain `.md` files that grow over time |
@@ -50,8 +50,6 @@ Invoke-RestMethod https://github.com/aniongithub/mind-map/releases/latest/downlo
 
 The installer:
 - Downloads the binary and adds it to PATH
-- Adds `127.0.0.1  mind-map.local` to your hosts file
-- Generates a local TLS certificate so `https://mind-map.local` works with no browser warnings
 - Installs mind-map as a persistent system service
 
 Binaries available for **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64**, **windows-x64**, and **windows-arm64**.
@@ -63,8 +61,8 @@ graph TD
     A[Preact Web App] -->|REST API| B
     C[AI Agent] -->|MCP stdio| D
 
-    subgraph "mind-map serve (HTTPS)"
-        B[HTTPS Server] --> E[Wiki Engine]
+    subgraph "mind-map serve (HTTP)"
+        B[HTTP Server] --> E[Wiki Engine]
     end
 
     subgraph "mind-map (stdio)"
@@ -75,14 +73,14 @@ graph TD
     E -->|read/write| G[Markdown Files]
 ```
 
-The web UI is a static Preact app served by `mind-map serve` over HTTPS. It uses a REST API to read and write pages. AI agents use stdio MCP, with each agent launching its own `mind-map` process.
+The web UI is a static Preact app served by `mind-map serve` over HTTP. It uses a REST API to read and write pages. AI agents use stdio MCP, with each agent launching its own `mind-map` process.
 
 ## Two Modes
 
 | Mode | Command | Use case |
 |------|---------|----------|
 | **stdio** (default) | `mind-map` | AI agents (Copilot, Claude, Cursor) |
-| **HTTPS** | `mind-map serve` | Web UI for humans at `https://mind-map.local` |
+| **HTTP** | `mind-map serve` | Web UI for humans at `http://localhost:4242` |
 
 Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wiki` by default). Multiple stdio processes can safely share the same wiki via SQLite page locking.
 
@@ -127,7 +125,7 @@ The installer can set up mind-map as a persistent system service that starts on 
 
 ```bash
 # Install and start the service
-sudo mind-map service install --addr 127.0.0.1:443
+sudo mind-map service install --addr 127.0.0.1:4242
 sudo mind-map service start
 
 # Manage
@@ -135,23 +133,6 @@ sudo mind-map service status
 sudo mind-map service stop
 sudo mind-map service uninstall
 ```
-
-## TLS Setup
-
-The installer automatically generates a local CA and server certificate so `https://mind-map.local` works without browser warnings. You can also manage certificates manually:
-
-```bash
-# Generate certs (as your user)
-mind-map tls generate
-
-# Install CA in system trust store (requires sudo on Linux)
-sudo mind-map tls install-ca --tls-dir ~/.mind-map/tls
-
-# Remove everything
-mind-map tls remove
-```
-
-On Linux, Chrome uses its own NSS certificate store. The installer handles this automatically if `libnss3-tools` is available.
 
 ## MCP Client Configuration
 
