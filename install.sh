@@ -72,6 +72,10 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL_
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
+# Ensure ~/.mind-map exists and is owned by the current user.
+# This must happen before any sudo commands that might create it as root.
+mkdir -p "${HOME}/.mind-map"
+
 # Stop existing service before replacing the binary
 if [ -f "${INSTALL_DIR}/mind-map" ]; then
   sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null && \
@@ -249,6 +253,7 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
     # Fix ownership: the service runs as root but agents run as the user.
     # Both need write access to the wiki dir and SQLite database.
     sudo chown -R "$(id -u):$(id -g)" "${SERVICE_WIKI_DIR}"
+    sudo chown -R "$(id -u):$(id -g)" "${HOME}/.mind-map"
   else
     "${INSTALL_DIR}/mind-map" service stop 2>/dev/null || true
     "${INSTALL_DIR}/mind-map" service uninstall 2>/dev/null || true
