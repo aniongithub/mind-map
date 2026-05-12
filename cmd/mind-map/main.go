@@ -16,7 +16,6 @@ import (
 
 	"github.com/aniongithub/mind-map/internal/config"
 	"github.com/aniongithub/mind-map/internal/logging"
-	mindtls "github.com/aniongithub/mind-map/internal/tls"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
 	mindsync "github.com/aniongithub/mind-map/internal/sync"
@@ -78,7 +77,7 @@ var serveCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringP("dir", "d", defaultWikiDir(), "Path to the wiki directory")
 
-	serveCmd.Flags().StringP("addr", "a", "127.0.0.1:443", "Address to listen on")
+	serveCmd.Flags().StringP("addr", "a", "127.0.0.1:4242", "Address to listen on")
 	serveCmd.Flags().String("webui", "", "Path to webui dist directory (overrides embedded webui)")
 	serveCmd.Flags().String("log-file", "", "Path to log file (logs to stderr and file)")
 	serveCmd.Flags().Duration("idle-timeout", 60*time.Second, "Idle timeout for HTTP connections (e.g. 30s, 1m)")
@@ -394,49 +393,21 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		IdleTimeout:       idleTimeout,
 	}
 
-	// Serve HTTPS if TLS certs are available, otherwise HTTP.
-	// Derive TLS dir from the wiki dir (sibling directory) so it works
-	// correctly when running as a system service with a different home.
-	tlsDir := mindtls.DirFromWikiDir(dir)
-	useTLS := mindtls.HasCerts(tlsDir)
+	slog.Info("mind-map server starting",
+		slog.String("addr", addr),
+		slog.String("wiki", w.Root()),
+		slog.String("url", "http://"+addr),
+	)
 
-	if useTLS {
-		certFile, keyFile := mindtls.CertPaths(tlsDir)
-		slog.Info("mind-map server starting",
-			slog.String("addr", addr),
-			slog.String("wiki", w.Root()),
-			slog.String("url", "https://"+addr),
-			slog.Bool("tls", true),
-		)
+	go func() {
+		<-stopCh
+		slog.Info("shutting down HTTP server")
+		server.Close()
+	}()
 
-		go func() {
-			<-stopCh
-			slog.Info("shutting down HTTP server")
-			server.Close()
-		}()
-
-		if err := server.ListenAndServeTLS(certFile, keyFile); err != http.ErrServerClosed {
-			slog.Error("server error", slog.Any("error", err))
-			return err
-		}
-	} else {
-		slog.Info("mind-map server starting",
-			slog.String("addr", addr),
-			slog.String("wiki", w.Root()),
-			slog.String("url", "http://"+addr),
-			slog.Bool("tls", false),
-		)
-
-		go func() {
-			<-stopCh
-			slog.Info("shutting down HTTP server")
-			server.Close()
-		}()
-
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			slog.Error("server error", slog.Any("error", err))
-			return err
-		}
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("server error", slog.Any("error", err))
+		return err
 	}
 	slog.Info("server stopped")
 	return nil

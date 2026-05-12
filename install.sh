@@ -98,46 +98,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "==> Codesigned binary for macOS" || true
 fi
 
-# Linux: allow binding port 80 without root
-if [[ "$(uname -s)" == "Linux" ]] && command -v setcap >/dev/null 2>&1; then
-  sudo setcap cap_net_bind_service=+ep "${INSTALL_DIR}/mind-map" 2>/dev/null && \
-    echo "==> Granted low-port binding capability" || \
-    echo "  Note: Could not set capability. Port 80 may require root."
-fi
-
-# Add mind-map.local to /etc/hosts for reliable local name resolution
-if ! grep -q "mind-map\.local" /etc/hosts 2>/dev/null; then
-  echo "127.0.0.1  mind-map.local" | sudo tee -a /etc/hosts >/dev/null 2>/dev/null && \
-    echo "==> Added mind-map.local to /etc/hosts" || \
-    echo "  Note: Could not update /etc/hosts. Add '127.0.0.1  mind-map.local' manually."
-fi
-
-# Set up TLS so https://mind-map.local works without browser warnings
-TLS_DIR="${HOME}/.mind-map/tls"
-echo "==> Setting up TLS certificates..."
-# Generate certs as the current user (writes to ~/.mind-map/tls/)
-"${INSTALL_DIR}/mind-map" tls generate --tls-dir "${TLS_DIR}" 2>&1
-# Install CA in system trust store (requires elevated privileges on Linux)
-if [[ "$(uname -s)" == "Linux" ]]; then
-  sudo "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
-    echo "  Note: Could not install CA. Run 'sudo mind-map tls install-ca --tls-dir ${TLS_DIR}' manually."
-  # Also install into Chrome/Chromium NSS database (runs as user, no sudo)
-  if [ -d "${HOME}/.pki/nssdb" ]; then
-    if command -v certutil >/dev/null 2>&1; then
-      certutil -d sql:"${HOME}/.pki/nssdb" -A -t "C,," -n "mind-map Local CA" -i "${TLS_DIR}/ca.crt" 2>/dev/null && \
-        echo "==> CA installed in Chrome/Chromium trust store" || \
-        echo "  Note: Could not install CA in Chrome. Install libnss3-tools and re-run."
-    else
-      echo "  Note: Install libnss3-tools for Chrome to trust the CA:"
-      echo "    sudo apt install libnss3-tools"
-      echo "    certutil -d sql:${HOME}/.pki/nssdb -A -t 'C,,' -n 'mind-map Local CA' -i ${TLS_DIR}/ca.crt"
-    fi
-  fi
-else
-  "${INSTALL_DIR}/mind-map" tls install-ca --tls-dir "${TLS_DIR}" 2>&1 || \
-    echo "  Note: Could not install CA. Run 'mind-map tls install-ca' manually."
-fi
-
 echo "==> Installed mind-map to ${INSTALL_DIR}/mind-map"
 
 # Verify
@@ -174,7 +134,7 @@ done
 # Interactive: set up as a persistent service
 # ---------------------------------------------------------------------------
 
-DEFAULT_PORT="443"
+DEFAULT_PORT="4242"
 DEFAULT_WIKI_DIR="${HOME}/.mind-map/wiki"
 SERVICE_PORT="$DEFAULT_PORT"
 
@@ -262,11 +222,7 @@ if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   fi
 
   echo ""
-  if [ "$SERVICE_PORT" = "443" ]; then
-    echo "  Web UI: https://mind-map.local"
-  else
-    echo "  Web UI: https://mind-map.local:${SERVICE_PORT}"
-  fi
+  echo "  Web UI: http://localhost:${SERVICE_PORT}"
   echo ""
   echo "  Manage with:  sudo mind-map service status|stop|start|uninstall"
 fi
