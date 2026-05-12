@@ -34,6 +34,14 @@ func DefaultDir() string {
 	return filepath.Join(home, ".mind-map", "tls")
 }
 
+// DirFromWikiDir derives the TLS directory from the wiki directory.
+// The wiki dir is typically ~/.mind-map/wiki, so TLS is the sibling
+// ~/.mind-map/tls. This is more reliable than DefaultDir() when
+// running as a system service (where os.UserHomeDir() may differ).
+func DirFromWikiDir(wikiDir string) string {
+	return filepath.Join(filepath.Dir(wikiDir), "tls")
+}
+
 // CertPaths returns the paths to the server cert and key.
 func CertPaths(dir string) (certFile, keyFile string) {
 	return filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key")

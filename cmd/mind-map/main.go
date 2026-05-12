@@ -394,8 +394,10 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		IdleTimeout:       idleTimeout,
 	}
 
-	// Serve HTTPS if TLS certs are available, otherwise HTTP
-	tlsDir := mindtls.DefaultDir()
+	// Serve HTTPS if TLS certs are available, otherwise HTTP.
+	// Derive TLS dir from the wiki dir (sibling directory) so it works
+	// correctly when running as a system service with a different home.
+	tlsDir := mindtls.DirFromWikiDir(dir)
 	useTLS := mindtls.HasCerts(tlsDir)
 
 	if useTLS {
