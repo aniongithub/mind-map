@@ -36,9 +36,6 @@
       }
     }
   },
-  "containerEnv": {
-    "MIND_MAP_PORT": "4242"
-  },
   "appPort": ["51888:4242"],
   "portsAttributes": {
     "4242": {
