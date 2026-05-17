@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './mcp';
+import { Logo } from './Logo';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
@@ -628,6 +629,7 @@ export function App() {
                 ) : current ? (
                     <>
                         <div class="page-header">
+                            <span class="page-header-logo" aria-hidden="true"><Logo size={72} /></span>
                             <div class="page-title">
                                 <Highlighted text={current.title} query={searchQuery} />
                                 {!editing && (
@@ -689,7 +691,10 @@ export function App() {
                         )}
                     </>
                 ) : (
-                    <div class="empty">select a page</div>
+                    <div class="empty">
+                        <Logo size={96} />
+                        <span>select a page</span>
+                    </div>
                 )}
             </div>
         </div>
