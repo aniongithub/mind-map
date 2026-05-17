@@ -76,7 +76,7 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 			return err
 		}
 
-		diskMtime := info.ModTime().UTC().Format(time.RFC3339)
+		diskMtime := info.ModTime().UTC().Format(time.RFC3339Nano)
 		if idxMtime, exists := indexed[pagePath]; exists && idxMtime == diskMtime {
 			continue // unchanged
 		}
@@ -184,7 +184,7 @@ func (w *Wiki) indexPage(ctx context.Context, pagePath string) error {
 
 	_, err = tx.ExecContext(ctx,
 		"INSERT OR REPLACE INTO pages (path, title, body, meta, modified) VALUES (?, ?, ?, ?, ?)",
-		pagePath, parsed.title, parsed.body, string(metaJSON), info.ModTime().UTC().Format(time.RFC3339),
+		pagePath, parsed.title, parsed.body, string(metaJSON), info.ModTime().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return err

@@ -35,7 +35,7 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 		slog.Warn("page metadata parse error", slog.String("page", pagePath), slog.Any("error", err))
 	}
 
-	modTime, err := time.Parse(time.RFC3339, modified)
+	modTime, err := time.Parse(time.RFC3339Nano, modified)
 	if err != nil {
 		slog.Warn("page modified time parse error", slog.String("page", pagePath), slog.Any("error", err))
 	}
@@ -80,7 +80,12 @@ func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 		query += " WHERE path LIKE ? OR path = ?"
 		args = append(args, prefix+"/%", prefix)
 	}
-	query += " ORDER BY modified DESC"
+	// modified is stored with nanosecond precision so files written
+	// within the same second (common after bulk operations like a git
+	// pull on a synced wiki) still get a deterministic Recent order.
+	// path is included as a tiebreaker for the rare case where two
+	// pages share an mtime exactly.
+	query += " ORDER BY modified DESC, path ASC"
 
 	rows, err := w.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -99,7 +104,7 @@ func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 		if err := json.Unmarshal([]byte(metaStr), &p.Frontmatter); err != nil {
 			slog.Warn("list pages metadata parse error", slog.String("page", p.Path), slog.Any("error", err))
 		}
-		if t, err := time.Parse(time.RFC3339, modified); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, modified); err == nil {
 			p.ModifiedAt = t
 		} else {
 			slog.Warn("list pages time parse error", slog.String("page", p.Path), slog.Any("error", err))
@@ -332,7 +337,7 @@ func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	}
 
 	// Recent pages
-	rows, err := w.db.QueryContext(ctx, "SELECT path, title, modified FROM pages ORDER BY modified DESC LIMIT 20")
+	rows, err := w.db.QueryContext(ctx, "SELECT path, title, modified FROM pages ORDER BY modified DESC, path ASC LIMIT 20")
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +351,7 @@ func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 			slog.Warn("context scan error", slog.Any("error", err))
 			continue
 		}
-		if t, err := time.Parse(time.RFC3339, modified); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, modified); err == nil {
 			p.ModifiedAt = t
 		} else {
 			slog.Warn("context time parse error", slog.String("page", p.Path), slog.Any("error", err))
