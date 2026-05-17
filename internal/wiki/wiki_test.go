@@ -188,6 +188,93 @@ func TestDeletePage(t *testing.T) {
 	}
 }
 
+func TestMovePage(t *testing.T) {
+	w, dir := testWiki(t)
+	ctx := context.Background()
+
+	if err := w.MovePage(ctx, "Go", "languages/Go"); err != nil {
+		t.Fatalf("MovePage: %v", err)
+	}
+
+	// Old file should be gone; new file should exist.
+	if _, err := os.Stat(filepath.Join(dir, "Go.md")); !os.IsNotExist(err) {
+		t.Errorf("old file still exists: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "languages", "Go.md")); err != nil {
+		t.Errorf("new file missing: %v", err)
+	}
+
+	// Index should reflect the move: old gone, new present.
+	if _, err := w.GetPage(ctx, "Go"); err == nil {
+		t.Error("GetPage on old path should fail")
+	}
+	moved, err := w.GetPage(ctx, "languages/Go")
+	if err != nil {
+		t.Fatalf("GetPage on new path: %v", err)
+	}
+	if moved.Path != "languages/Go" {
+		t.Errorf("moved.Path = %q, want %q", moved.Path, "languages/Go")
+	}
+
+	// Only one indexed copy.
+	all, err := w.ListPages(ctx, "")
+	if err != nil {
+		t.Fatalf("ListPages: %v", err)
+	}
+	var langGo, oldGo int
+	for _, p := range all {
+		if p.Path == "languages/Go" {
+			langGo++
+		}
+		if p.Path == "Go" {
+			oldGo++
+		}
+	}
+	if langGo != 1 || oldGo != 0 {
+		t.Errorf("want exactly one languages/Go and zero Go; got langGo=%d oldGo=%d", langGo, oldGo)
+	}
+}
+
+func TestMovePageNormalizesPaths(t *testing.T) {
+	w, _ := testWiki(t)
+	ctx := context.Background()
+
+	// Denormalized inputs should resolve to the same canonical paths.
+	if err := w.MovePage(ctx, "/Go", "./languages/Go"); err != nil {
+		t.Fatalf("MovePage with denormalized paths: %v", err)
+	}
+	if _, err := w.GetPage(ctx, "languages/Go"); err != nil {
+		t.Errorf("GetPage after normalized move: %v", err)
+	}
+}
+
+func TestMovePageFailsWhenDestinationExists(t *testing.T) {
+	w, _ := testWiki(t)
+	ctx := context.Background()
+
+	if err := w.MovePage(ctx, "Go", "index"); err == nil {
+		t.Error("MovePage should fail when destination exists")
+	}
+	// Source must still be there.
+	if _, err := w.GetPage(ctx, "Go"); err != nil {
+		t.Errorf("source page gone after failed move: %v", err)
+	}
+}
+
+func TestMovePageFailsWhenSourceMissing(t *testing.T) {
+	w, _ := testWiki(t)
+	if err := w.MovePage(context.Background(), "does-not-exist", "elsewhere"); err == nil {
+		t.Error("MovePage should fail when source does not exist")
+	}
+}
+
+func TestMovePageFailsWhenSamePath(t *testing.T) {
+	w, _ := testWiki(t)
+	if err := w.MovePage(context.Background(), "Go", "/Go"); err == nil {
+		t.Error("MovePage should fail when from and to normalize to same path")
+	}
+}
+
 func TestListPages(t *testing.T) {
 	w, _ := testWiki(t)
 
