@@ -5,6 +5,41 @@ import mermaid from 'mermaid';
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
 
+// Tokenize a free-form search query the same way the FTS index does:
+// split on whitespace, strip leading/trailing punctuation, drop empties.
+function searchTokens(query: string): string[] {
+    return query
+        .trim()
+        .split(/\s+/)
+        .map(t => t.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, ''))
+        .filter(Boolean);
+}
+
+function searchRegex(tokens: string[]): RegExp | null {
+    if (tokens.length === 0) return null;
+    const escaped = tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp(`(${escaped.join('|')})`, 'giu');
+}
+
+// Renders plain text with each search-query token wrapped in <mark>.
+// Use this for any place that renders user-supplied text directly
+// (sidebar items, page header). The body uses highlightHTML instead
+// because it needs to highlight inside marked-rendered HTML.
+function Highlighted({ text, query }: { text: string; query: string }) {
+    const re = searchRegex(searchTokens(query));
+    if (!re || !text) return <>{text}</>;
+    const parts: (string | { mark: string })[] = [];
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        if (m.index > last) parts.push(text.slice(last, m.index));
+        parts.push({ mark: m[0] });
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return <>{parts.map((p, i) => typeof p === 'string' ? p : <mark key={i}>{p.mark}</mark>)}</>;
+}
+
 interface SyncSettings {
     enabled: boolean;
     default: string;
@@ -341,15 +376,8 @@ export function App() {
     // touched. Skips <script>/<style>/<mark> to avoid breaking embedded
     // content or double-wrapping.
     const highlightHTML = (html: string, query: string): string => {
-        const q = query.trim();
-        if (!q) return html;
-        const tokens = q
-            .split(/\s+/)
-            .map(t => t.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, ''))
-            .filter(Boolean);
-        if (tokens.length === 0) return html;
-        const escaped = tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        const re = new RegExp(`(${escaped.join('|')})`, 'giu');
+        const re = searchRegex(searchTokens(query));
+        if (!re) return html;
 
         const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
         const root = doc.body.firstElementChild as HTMLElement;
@@ -477,8 +505,8 @@ export function App() {
                                     class={`page-item ${current?.path === p.path ? 'active' : ''}`}
                                     onClick={() => navigate(p.path)}
                                 >
-                                    <div class="page-item-title">{p.title || p.path}</div>
-                                    <div class="page-item-path">{p.path}</div>
+                                    <div class="page-item-title"><Highlighted text={p.title || p.path} query={searchQuery} /></div>
+                                    <div class="page-item-path"><Highlighted text={p.path} query={searchQuery} /></div>
                                 </li>
                             ))}
                         </ul>
@@ -583,7 +611,7 @@ export function App() {
                     <>
                         <div class="page-header">
                             <div class="page-title">
-                                {current.title}
+                                <Highlighted text={current.title} query={searchQuery} />
                                 {!editing && (
                                     <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
                                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
@@ -591,7 +619,7 @@ export function App() {
                                 )}
                             </div>
                             <div class="page-meta">
-                                <span>{current.path}</span>
+                                <span><Highlighted text={current.path} query={searchQuery} /></span>
                                 {current.modified_at && <span>{new Date(current.modified_at).toLocaleDateString()}</span>}
                                 {current.links && current.links.length > 0 && (
                                     <span>{current.links.length} links</span>

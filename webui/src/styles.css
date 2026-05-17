@@ -333,7 +333,7 @@ html, body, #root {
     background: var(--tile-bg);
 }
 
-.markdown mark {
+mark {
     background: var(--accent);
     color: var(--bg);
     padding: 0 2px;
