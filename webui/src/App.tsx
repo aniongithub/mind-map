@@ -45,7 +45,7 @@ export function App() {
     const [current, setCurrent] = useState<Page | null>(null);
     const [editing, setEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
+    const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('mm-search-query') || '');
     const [showSettings, setShowSettings] = useState(false);
     const [settings, setSettings] = useState<Settings | null>(null);
     const [configPath, setConfigPath] = useState('');
@@ -176,7 +176,19 @@ export function App() {
         setPages(sortPages(rawPages));
     }, [rawPages, sortMode]);
 
-    useEffect(() => { loadPages(); }, []);
+    // Persist search query so it survives reload; on first mount restore
+    // either the filtered list (if a query was saved) or the full page list.
+    useEffect(() => {
+        localStorage.setItem('mm-search-query', searchQuery);
+    }, [searchQuery]);
+
+    useEffect(() => {
+        if (searchQuery.trim()) {
+            handleSearch();
+        } else {
+            loadPages();
+        }
+    }, []);
 
     // Hash routing
     const getHashPath = (): string | null => {
@@ -364,13 +376,25 @@ export function App() {
                     <>
                         <div class="sidebar-search">
                             <div class="search-wrapper">
-                                <input
-                                    type="text"
-                                    placeholder="search..."
-                                    value={searchQuery}
-                                    onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                                />
+                                <div class="search-input-wrap">
+                                    <input
+                                        type="text"
+                                        placeholder="search..."
+                                        value={searchQuery}
+                                        onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                    />
+                                    {searchQuery && (
+                                        <button
+                                            class="search-clear"
+                                            onClick={() => { setSearchQuery(''); loadPages(); }}
+                                            title="Clear search"
+                                            aria-label="Clear search"
+                                        >
+                                            &times;
+                                        </button>
+                                    )}
+                                </div>
                                 <button
                                     class="sort-toggle"
                                     onClick={cycleSortMode}
