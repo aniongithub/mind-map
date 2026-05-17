@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './mcp';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
@@ -336,6 +336,62 @@ export function App() {
         return html;
     };
 
+    // Wrap each occurrence of any search token in <mark>. Works on parsed
+    // DOM (not via regex on raw HTML) so tags and attributes are never
+    // touched. Skips <script>/<style>/<mark> to avoid breaking embedded
+    // content or double-wrapping.
+    const highlightHTML = (html: string, query: string): string => {
+        const q = query.trim();
+        if (!q) return html;
+        const tokens = q
+            .split(/\s+/)
+            .map(t => t.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, ''))
+            .filter(Boolean);
+        if (tokens.length === 0) return html;
+        const escaped = tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const re = new RegExp(`(${escaped.join('|')})`, 'giu');
+
+        const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+        const root = doc.body.firstElementChild as HTMLElement;
+        const skip = new Set(['SCRIPT', 'STYLE', 'MARK']);
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(n) {
+                if (!n.parentElement) return NodeFilter.FILTER_REJECT;
+                if (skip.has(n.parentElement.tagName)) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        } as NodeFilter);
+        const targets: Text[] = [];
+        let t: Node | null;
+        while ((t = walker.nextNode())) targets.push(t as Text);
+
+        for (const node of targets) {
+            const text = node.nodeValue || '';
+            re.lastIndex = 0;
+            if (!re.test(text)) continue;
+            re.lastIndex = 0;
+            const frag = doc.createDocumentFragment();
+            let last = 0;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+                if (m.index > last) frag.appendChild(doc.createTextNode(text.slice(last, m.index)));
+                const mark = doc.createElement('mark');
+                mark.textContent = m[0];
+                frag.appendChild(mark);
+                last = m.index + m[0].length;
+            }
+            if (last < text.length) frag.appendChild(doc.createTextNode(text.slice(last)));
+            node.parentNode!.replaceChild(frag, node);
+        }
+        return root.innerHTML;
+    };
+
+    const renderedBodyHTML = useMemo(() => {
+        if (!current) return '';
+        const html = renderMarkdown(current.body);
+        return editing ? html : highlightHTML(html, searchQuery);
+    }, [current?.body, searchQuery, editing]);
+
     const bodyRef = useRef<HTMLDivElement>(null);
 
     // Render mermaid diagrams after DOM update
@@ -352,6 +408,16 @@ export function App() {
             }
         }
     }, [current, editing, isDark]);
+
+    // After the rendered body is in the DOM, scroll the first highlighted
+    // match into view so the user doesn't have to hunt through long pages.
+    useEffect(() => {
+        if (editing || !bodyRef.current || !searchQuery.trim()) return;
+        const first = bodyRef.current.querySelector('mark');
+        if (first) {
+            first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }, [renderedBodyHTML]);
 
     const pageCount = pages.length;
 
@@ -554,7 +620,7 @@ export function App() {
                                 <div class="page-body" ref={bodyRef} key={`${current.path}-${current.modified_at}`}>
                                     <div
                                         class="markdown"
-                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(current.body) }}
+                                        dangerouslySetInnerHTML={{ __html: renderedBodyHTML }}
                                     />
                                 </div>
                                 {current.backlinks && current.backlinks.length > 0 && (
