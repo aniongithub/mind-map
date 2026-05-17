@@ -1,9 +1,59 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './mcp';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
+// Tokenize a free-form search query the same way the FTS index does:
+//   - "quoted phrases" become a single token (so they highlight as a
+//     phrase and pass through to FTS5 as a phrase match)
+//   - bare runs of non-whitespace become individual tokens
+//   - leading/trailing punctuation on bare tokens is stripped
+//   - empty tokens are dropped
+function searchTokens(query: string): string[] {
+    const tokens: string[] = [];
+    const re = /"([^"]+)"|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(query)) !== null) {
+        const tok = m[1] !== undefined
+            ? m[1].trim()
+            : m[2].replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, '');
+        if (tok) tokens.push(tok);
+    }
+    return tokens;
+}
+
+function searchRegex(tokens: string[]): RegExp | null {
+    if (tokens.length === 0) return null;
+    // Escape regex metacharacters, then collapse interior whitespace in
+    // phrase tokens to \s+ so "MCP server" still matches even if the
+    // rendered text has a newline or extra spaces between the words.
+    const escaped = tokens.map(t =>
+        t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\s+/g, '\\s+')
+    );
+    return new RegExp(`(${escaped.join('|')})`, 'giu');
+}
+
+// Renders plain text with each search-query token wrapped in <mark>.
+// Use this for any place that renders user-supplied text directly
+// (sidebar items, page header). The body uses highlightHTML instead
+// because it needs to highlight inside marked-rendered HTML.
+function Highlighted({ text, query }: { text: string; query: string }) {
+    const re = searchRegex(searchTokens(query));
+    if (!re || !text) return <>{text}</>;
+    const parts: (string | { mark: string })[] = [];
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        if (m.index > last) parts.push(text.slice(last, m.index));
+        parts.push({ mark: m[0] });
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return <>{parts.map((p, i) => typeof p === 'string' ? p : <mark key={i}>{p.mark}</mark>)}</>;
+}
 
 interface SyncSettings {
     enabled: boolean;
@@ -45,7 +95,7 @@ export function App() {
     const [current, setCurrent] = useState<Page | null>(null);
     const [editing, setEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
+    const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('mm-search-query') || '');
     const [showSettings, setShowSettings] = useState(false);
     const [settings, setSettings] = useState<Settings | null>(null);
     const [configPath, setConfigPath] = useState('');
@@ -176,7 +226,19 @@ export function App() {
         setPages(sortPages(rawPages));
     }, [rawPages, sortMode]);
 
-    useEffect(() => { loadPages(); }, []);
+    // Persist search query so it survives reload; on first mount restore
+    // either the filtered list (if a query was saved) or the full page list.
+    useEffect(() => {
+        localStorage.setItem('mm-search-query', searchQuery);
+    }, [searchQuery]);
+
+    useEffect(() => {
+        if (searchQuery.trim()) {
+            handleSearch();
+        } else {
+            loadPages();
+        }
+    }, []);
 
     // Hash routing
     const getHashPath = (): string | null => {
@@ -324,9 +386,61 @@ export function App() {
         return html;
     };
 
+    // Wrap each occurrence of any search token in <mark>. Works on parsed
+    // DOM (not via regex on raw HTML) so tags and attributes are never
+    // touched. Skips <script>/<style>/<mark> to avoid breaking embedded
+    // content or double-wrapping.
+    const highlightHTML = (html: string, query: string): string => {
+        const re = searchRegex(searchTokens(query));
+        if (!re) return html;
+
+        const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+        const root = doc.body.firstElementChild as HTMLElement;
+        const skip = new Set(['SCRIPT', 'STYLE', 'MARK']);
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(n) {
+                if (!n.parentElement) return NodeFilter.FILTER_REJECT;
+                if (skip.has(n.parentElement.tagName)) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        } as NodeFilter);
+        const targets: Text[] = [];
+        let t: Node | null;
+        while ((t = walker.nextNode())) targets.push(t as Text);
+
+        for (const node of targets) {
+            const text = node.nodeValue || '';
+            re.lastIndex = 0;
+            if (!re.test(text)) continue;
+            re.lastIndex = 0;
+            const frag = doc.createDocumentFragment();
+            let last = 0;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+                if (m.index > last) frag.appendChild(doc.createTextNode(text.slice(last, m.index)));
+                const mark = doc.createElement('mark');
+                mark.textContent = m[0];
+                frag.appendChild(mark);
+                last = m.index + m[0].length;
+            }
+            if (last < text.length) frag.appendChild(doc.createTextNode(text.slice(last)));
+            node.parentNode!.replaceChild(frag, node);
+        }
+        return root.innerHTML;
+    };
+
+    const renderedBodyHTML = useMemo(() => {
+        if (!current) return '';
+        const html = renderMarkdown(current.body);
+        return editing ? html : highlightHTML(html, searchQuery);
+    }, [current?.body, searchQuery, editing]);
+
     const bodyRef = useRef<HTMLDivElement>(null);
 
-    // Render mermaid diagrams after DOM update
+    // Render mermaid diagrams after DOM update. renderedBodyHTML is in
+    // the deps because Preact replaces the .mermaid <div>s whenever the
+    // rendered body changes (notably when the search filter changes and
+    // the body gets re-highlighted) — the new nodes need to be processed.
     useEffect(() => {
         if (bodyRef.current && !editing) {
             const els = bodyRef.current.querySelectorAll('.mermaid');
@@ -339,7 +453,17 @@ export function App() {
                 mermaid.run({ nodes: els as unknown as ArrayLike<HTMLElement> });
             }
         }
-    }, [current, editing, isDark]);
+    }, [renderedBodyHTML, editing, isDark]);
+
+    // After the rendered body is in the DOM, scroll the first highlighted
+    // match into view so the user doesn't have to hunt through long pages.
+    useEffect(() => {
+        if (editing || !bodyRef.current || !searchQuery.trim()) return;
+        const first = bodyRef.current.querySelector('mark');
+        if (first) {
+            first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }, [renderedBodyHTML]);
 
     const pageCount = pages.length;
 
@@ -364,13 +488,25 @@ export function App() {
                     <>
                         <div class="sidebar-search">
                             <div class="search-wrapper">
-                                <input
-                                    type="text"
-                                    placeholder="search..."
-                                    value={searchQuery}
-                                    onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                                />
+                                <div class="search-input-wrap">
+                                    <input
+                                        type="text"
+                                        placeholder="search..."
+                                        value={searchQuery}
+                                        onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                                    />
+                                    {searchQuery && (
+                                        <button
+                                            class="search-clear"
+                                            onClick={() => { setSearchQuery(''); loadPages(); }}
+                                            title="Clear search"
+                                            aria-label="Clear search"
+                                        >
+                                            &times;
+                                        </button>
+                                    )}
+                                </div>
                                 <button
                                     class="sort-toggle"
                                     onClick={cycleSortMode}
@@ -387,8 +523,8 @@ export function App() {
                                     class={`page-item ${current?.path === p.path ? 'active' : ''}`}
                                     onClick={() => navigate(p.path)}
                                 >
-                                    <div class="page-item-title">{p.title || p.path}</div>
-                                    <div class="page-item-path">{p.path}</div>
+                                    <div class="page-item-title"><Highlighted text={p.title || p.path} query={searchQuery} /></div>
+                                    <div class="page-item-path"><Highlighted text={p.path} query={searchQuery} /></div>
                                 </li>
                             ))}
                         </ul>
@@ -493,7 +629,7 @@ export function App() {
                     <>
                         <div class="page-header">
                             <div class="page-title">
-                                {current.title}
+                                <Highlighted text={current.title} query={searchQuery} />
                                 {!editing && (
                                     <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
                                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
@@ -501,7 +637,7 @@ export function App() {
                                 )}
                             </div>
                             <div class="page-meta">
-                                <span>{current.path}</span>
+                                <span><Highlighted text={current.path} query={searchQuery} /></span>
                                 {current.modified_at && <span>{new Date(current.modified_at).toLocaleDateString()}</span>}
                                 {current.links && current.links.length > 0 && (
                                     <span>{current.links.length} links</span>
@@ -530,7 +666,7 @@ export function App() {
                                 <div class="page-body" ref={bodyRef} key={`${current.path}-${current.modified_at}`}>
                                     <div
                                         class="markdown"
-                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(current.body) }}
+                                        dangerouslySetInnerHTML={{ __html: renderedBodyHTML }}
                                     />
                                 </div>
                                 {current.backlinks && current.backlinks.length > 0 && (
