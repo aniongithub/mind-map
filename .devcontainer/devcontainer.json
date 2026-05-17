@@ -36,7 +36,7 @@
       }
     }
   },
-  "appPort": ["51888:4242"],
+  "appPort": ["127.0.0.1:51888:4242"],
   "portsAttributes": {
     "4242": {
       "label": "mind-map Server (devcontainer)",
