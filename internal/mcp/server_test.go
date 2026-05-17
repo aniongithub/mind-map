@@ -114,6 +114,7 @@ func TestListTools(t *testing.T) {
 		"create_page":     false,
 		"update_page":     false,
 		"delete_page":     false,
+		"move_page":       false,
 		"list_pages":      false,
 		"get_backlinks":   false,
 	}
@@ -263,5 +264,33 @@ func TestDeletePage(t *testing.T) {
 	})
 	if err == nil && !result.IsError {
 		t.Error("expected error after deleting page, got success")
+	}
+}
+
+func TestMovePage(t *testing.T) {
+	session := setupTestServer(t)
+
+	callTool(t, session, "move_page", map[string]any{
+		"from": "Go",
+		"to":   "languages/Go",
+	})
+
+	text := callTool(t, session, "get_page", map[string]any{"path": "languages/Go"})
+	var page wiki.Page
+	if err := json.Unmarshal([]byte(text), &page); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if page.Path != "languages/Go" {
+		t.Errorf("Path = %q, want %q", page.Path, "languages/Go")
+	}
+
+	// Old path should now be gone.
+	ctx := context.Background()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "get_page",
+		Arguments: map[string]any{"path": "Go"},
+	})
+	if err == nil && !result.IsError {
+		t.Error("expected error fetching old path after move, got success")
 	}
 }

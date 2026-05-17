@@ -70,7 +70,10 @@ func Open(root string) (*Wiki, error) {
 	}
 
 	dbPath := filepath.Join(absRoot, ".mind-map.db")
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	// recursive_triggers must be ON so that the AFTER DELETE trigger on
+	// `pages` fires during INSERT OR REPLACE (used by indexPage/Reindex).
+	// Without it, pages_fts accumulates orphan entries — see #35.
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_pragma=recursive_triggers(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -80,6 +83,13 @@ func Open(root string) (*Wiki, error) {
 	if err := w.initSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
+	}
+
+	// Rebuild pages_fts from the content table once on startup. This
+	// purges any orphan FTS rows left behind by earlier versions that
+	// ran without recursive_triggers enabled.
+	if _, err := db.Exec("INSERT INTO pages_fts(pages_fts) VALUES('rebuild')"); err != nil {
+		slog.Warn("pages_fts rebuild failed", slog.Any("error", err))
 	}
 
 	if err := w.Reindex(context.Background()); err != nil {

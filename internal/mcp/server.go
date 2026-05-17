@@ -83,6 +83,11 @@ func (s *Server) registerTools() {
 	}, s.deletePage)
 
 	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "move_page",
+		Description: "Rename or relocate a wiki page atomically. Moves the underlying file from one path to another, updates the index, and rewrites the page's outgoing links. Fails if the destination already exists. Use this instead of create_page + delete_page to avoid leaving duplicate pages behind.",
+	}, s.movePage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "list_pages",
 		Description: "List wiki pages, optionally filtered by a path prefix.",
 	}, s.listPages)
@@ -126,6 +131,11 @@ type listInput struct {
 type registerSyncInput struct {
 	Prefix string `json:"prefix" jsonschema:"wiki path prefix to sync, e.g. projects/mind-map"`
 	Remote string `json:"remote" jsonschema:"git remote URL, e.g. https://github.com/user/repo.wiki.git"`
+}
+
+type moveInput struct {
+	From string `json:"from" jsonschema:"current page path without .md extension"`
+	To   string `json:"to" jsonschema:"new page path without .md extension"`
 }
 
 // --- Tool handlers ---
@@ -213,6 +223,20 @@ func (s *Server) deletePage(ctx context.Context, _ *mcp.CallToolRequest, input p
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: "Deleted page: " + input.Path},
+		},
+	}, nil, nil
+}
+
+func (s *Server) movePage(ctx context.Context, _ *mcp.CallToolRequest, input moveInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	if err := s.wiki.MovePage(ctx, input.From, input.To); err != nil {
+		slog.Error("tool.move_page failed", slog.String("from", input.From), slog.String("to", input.To), slog.Any("error", err))
+		return nil, nil, err
+	}
+	slog.Info("tool.move_page", slog.String("from", input.From), slog.String("to", input.To), slog.Duration("elapsed", time.Since(start)))
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Moved page: %s → %s", input.From, input.To)},
 		},
 	}, nil, nil
 }

@@ -17,8 +17,13 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 		return nil, err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return nil, err
+	}
+
 	var title, body, metaStr, modified string
-	err := w.db.QueryRowContext(ctx,
+	err = w.db.QueryRowContext(ctx,
 		"SELECT title, body, meta, modified FROM pages WHERE path = ?", pagePath,
 	).Scan(&title, &body, &metaStr, &modified)
 	if err != nil {
@@ -59,6 +64,14 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if prefix != "" {
+		normalized, err := normalizePagePath(prefix)
+		if err != nil {
+			return nil, err
+		}
+		prefix = normalized
 	}
 
 	query := "SELECT path, title, meta, modified FROM pages"
@@ -102,6 +115,11 @@ func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) 
 		return err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return err
+	}
+
 	if err := w.acquireLock(ctx, pagePath); err != nil {
 		return err
 	}
@@ -133,6 +151,11 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 		return err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return err
+	}
+
 	if err := w.acquireLock(ctx, pagePath); err != nil {
 		return err
 	}
@@ -158,6 +181,11 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 		return err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return err
+	}
+
 	if err := w.acquireLock(ctx, pagePath); err != nil {
 		return err
 	}
@@ -171,6 +199,81 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 
 	slog.Info("page deleted", slog.String("page", pagePath))
 	return w.removePageIndex(ctx, pagePath)
+}
+
+// MovePage renames a page atomically: it moves the underlying file from
+// fromPath to toPath, refreshes the index, and rewrites the page's
+// outgoing-link rows. Backlinks from other pages are intentionally left
+// untouched — those rows reflect [[wikilink]] text in source markdown that
+// still references the old name.
+//
+// Returns an error if the destination already exists, the source does
+// not exist, or either path is invalid. The two paths must differ after
+// normalization.
+func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	from, err := normalizePagePath(fromPath)
+	if err != nil {
+		return fmt.Errorf("from: %w", err)
+	}
+	to, err := normalizePagePath(toPath)
+	if err != nil {
+		return fmt.Errorf("to: %w", err)
+	}
+	if from == to {
+		return fmt.Errorf("from and to resolve to the same page: %s", from)
+	}
+
+	// Acquire locks in sorted order to avoid deadlocks when two movers
+	// pick opposite endpoints concurrently.
+	first, second := from, to
+	if second < first {
+		first, second = second, first
+	}
+	if err := w.acquireLock(ctx, first); err != nil {
+		return err
+	}
+	defer w.releaseLock(first)
+	if err := w.acquireLock(ctx, second); err != nil {
+		return err
+	}
+	defer w.releaseLock(second)
+
+	fromAbs := filepath.Join(w.root, from+".md")
+	toAbs := filepath.Join(w.root, to+".md")
+
+	if _, err := os.Stat(fromAbs); os.IsNotExist(err) {
+		return fmt.Errorf("page not found: %s", from)
+	} else if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+	if _, err := os.Stat(toAbs); err == nil {
+		return fmt.Errorf("destination already exists: %s", to)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat destination: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(toAbs), 0o755); err != nil {
+		return fmt.Errorf("create destination directory: %w", err)
+	}
+
+	if err := os.Rename(fromAbs, toAbs); err != nil {
+		return fmt.Errorf("rename page file: %w", err)
+	}
+
+	if err := w.removePageIndex(ctx, from); err != nil {
+		// File is already moved on disk; the next Reindex will recover.
+		slog.Warn("move: remove old index entry failed", slog.String("from", from), slog.Any("error", err))
+	}
+	if err := w.indexPage(ctx, to); err != nil {
+		return fmt.Errorf("index new page: %w", err)
+	}
+
+	slog.Info("page moved", slog.String("from", from), slog.String("to", to))
+	return nil
 }
 
 // Search performs a full-text search across page titles and bodies.
