@@ -17,8 +17,13 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 		return nil, err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return nil, err
+	}
+
 	var title, body, metaStr, modified string
-	err := w.db.QueryRowContext(ctx,
+	err = w.db.QueryRowContext(ctx,
 		"SELECT title, body, meta, modified FROM pages WHERE path = ?", pagePath,
 	).Scan(&title, &body, &metaStr, &modified)
 	if err != nil {
@@ -59,6 +64,14 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 func (w *Wiki) ListPages(ctx context.Context, prefix string) ([]Page, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if prefix != "" {
+		normalized, err := normalizePagePath(prefix)
+		if err != nil {
+			return nil, err
+		}
+		prefix = normalized
 	}
 
 	query := "SELECT path, title, meta, modified FROM pages"
@@ -102,6 +115,11 @@ func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) 
 		return err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return err
+	}
+
 	if err := w.acquireLock(ctx, pagePath); err != nil {
 		return err
 	}
@@ -133,6 +151,11 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 		return err
 	}
 
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
+		return err
+	}
+
 	if err := w.acquireLock(ctx, pagePath); err != nil {
 		return err
 	}
@@ -155,6 +178,11 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 // DeletePage removes a page from the filesystem and index.
 func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	pagePath, err := normalizePagePath(pagePath)
+	if err != nil {
 		return err
 	}
 
