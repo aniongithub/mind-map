@@ -6,18 +6,33 @@ import mermaid from 'mermaid';
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
 
 // Tokenize a free-form search query the same way the FTS index does:
-// split on whitespace, strip leading/trailing punctuation, drop empties.
+//   - "quoted phrases" become a single token (so they highlight as a
+//     phrase and pass through to FTS5 as a phrase match)
+//   - bare runs of non-whitespace become individual tokens
+//   - leading/trailing punctuation on bare tokens is stripped
+//   - empty tokens are dropped
 function searchTokens(query: string): string[] {
-    return query
-        .trim()
-        .split(/\s+/)
-        .map(t => t.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, ''))
-        .filter(Boolean);
+    const tokens: string[] = [];
+    const re = /"([^"]+)"|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(query)) !== null) {
+        const tok = m[1] !== undefined
+            ? m[1].trim()
+            : m[2].replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, '');
+        if (tok) tokens.push(tok);
+    }
+    return tokens;
 }
 
 function searchRegex(tokens: string[]): RegExp | null {
     if (tokens.length === 0) return null;
-    const escaped = tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    // Escape regex metacharacters, then collapse interior whitespace in
+    // phrase tokens to \s+ so "MCP server" still matches even if the
+    // rendered text has a newline or extra spaces between the words.
+    const escaped = tokens.map(t =>
+        t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\s+/g, '\\s+')
+    );
     return new RegExp(`(${escaped.join('|')})`, 'giu');
 }
 
@@ -422,7 +437,10 @@ export function App() {
 
     const bodyRef = useRef<HTMLDivElement>(null);
 
-    // Render mermaid diagrams after DOM update
+    // Render mermaid diagrams after DOM update. renderedBodyHTML is in
+    // the deps because Preact replaces the .mermaid <div>s whenever the
+    // rendered body changes (notably when the search filter changes and
+    // the body gets re-highlighted) — the new nodes need to be processed.
     useEffect(() => {
         if (bodyRef.current && !editing) {
             const els = bodyRef.current.querySelectorAll('.mermaid');
@@ -435,7 +453,7 @@ export function App() {
                 mermaid.run({ nodes: els as unknown as ArrayLike<HTMLElement> });
             }
         }
-    }, [current, editing, isDark]);
+    }, [renderedBodyHTML, editing, isDark]);
 
     // After the rendered body is in the DOM, scroll the first highlighted
     // match into view so the user doesn't have to hunt through long pages.
