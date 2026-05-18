@@ -52,7 +52,12 @@ code { font-family: var(--mono); font-size: 0.875em; }
   display: flex; align-items: center; gap: 0.5rem;
   font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none;
 }
-.logo-icon { font-size: 1.4rem; color: var(--accent); }
+.logo-icon {
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+}
+.logo-icon svg { display: block; }
 .nav-links { display: flex; gap: 1.5rem; align-items: center; }
 .nav-links a { color: var(--text-dim); font-size: 0.9rem; font-weight: 500; transition: color 0.2s; }
 .nav-links a:hover { color: var(--text); text-decoration: none; }
