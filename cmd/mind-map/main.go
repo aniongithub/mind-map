@@ -281,6 +281,15 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		jsonResponse(rw, backlinks)
 	})
 
+	mux.HandleFunc("GET /api/links", func(rw http.ResponseWriter, r *http.Request) {
+		links, err := w.AllLinks(r.Context())
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(rw, links)
+	})
+
 	// Settings API endpoints (UI only, not MCP)
 	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
 		current, err := config.Load(cfgPath)

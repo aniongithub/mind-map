@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './mcp';
 import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
+import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
@@ -556,10 +557,7 @@ export function App() {
                         )}
                     </>
                 ) : (
-                    <div class="empty">
-                        <Logo size={96} />
-                        <span>select a page</span>
-                    </div>
+                    <GraphView onNavigate={navigate} />
                 )}
             </div>
         </div>
