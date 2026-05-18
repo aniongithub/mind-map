@@ -127,10 +127,34 @@ export function App() {
     };
 
     // Persist search query so it survives reload; on first mount restore
-    // either the filtered list (if a query was saved) or the full page list.
+    // either the filtered list (if a query was saved) or the full page
+    // list. The URL takes precedence over localStorage (handled in the
+    // hash routing effect below).
     useEffect(() => {
         localStorage.setItem('mm-search-query', searchQuery);
     }, [searchQuery]);
+
+    // Mirror searchQuery into the URL hash so the filter is bookmarkable
+    // and reloads restore it. Live typing replaces in place so we don't
+    // pollute history with every keystroke — explicit commits (Enter,
+    // clicking a gray node) call commitSearch() instead to push a new
+    // entry.
+    useEffect(() => {
+        const current = parseHash();
+        if (current.query === searchQuery) return;
+        const newHash = buildHash(current.path, searchQuery);
+        window.history.replaceState(null, '', '#' + newHash);
+    }, [searchQuery]);
+
+    // Push a new history entry, then update the query. Use this for
+    // user actions that "commit" a filter so Back undoes the action.
+    const commitSearch = (query: string) => {
+        const current = parseHash();
+        if (current.query !== query) {
+            window.history.pushState(null, '', '#' + buildHash(current.path, query));
+        }
+        setSearchQuery(query);
+    };
 
     useEffect(() => {
         if (searchQuery.trim()) {
@@ -140,27 +164,52 @@ export function App() {
         }
     }, []);
 
-    // Hash routing
-    const getHashPath = (): string | null => {
-        const hash = window.location.hash.replace(/^#\/?/, '');
-        return hash || null;
+    // Hash routing: #/path/to/page?q=filter
+    // The hash carries two pieces of state: the currently-open page
+    // (or null for the graph view) and the active search filter. Both
+    // are reflected in the URL so back/forward navigation and reloads
+    // restore the same view.
+    const parseHash = (): { path: string | null; query: string } => {
+        const raw = window.location.hash.replace(/^#/, '');
+        const qIdx = raw.indexOf('?');
+        const pathPart = (qIdx >= 0 ? raw.slice(0, qIdx) : raw).replace(/^\//, '');
+        const queryPart = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
+        const params = new URLSearchParams(queryPart);
+        return { path: pathPart || null, query: params.get('q') || '' };
+    };
+
+    const buildHash = (path: string | null, query: string): string => {
+        const p = path ? `/${path}` : '/';
+        const q = query.trim();
+        return q ? `${p}?q=${encodeURIComponent(q)}` : p;
     };
 
     useEffect(() => {
         const onHash = () => {
-            const path = getHashPath();
+            const { path, query } = parseHash();
             if (path) openPage(path);
             else setCurrent(null);
+            // setState is a no-op when the value matches, so this won't
+            // ping-pong with the searchQuery→URL writer effect below.
+            setSearchQuery(query);
         };
         window.addEventListener('hashchange', onHash);
-        // Load initial page from hash
-        const initial = getHashPath();
-        if (initial) openPage(initial);
+
+        // Load initial state. URL wins over localStorage: a query in
+        // the hash means the user is sharing/reloading a filtered view
+        // and we should honor it exactly.
+        const initial = parseHash();
+        if (initial.path) openPage(initial.path);
+        if (initial.query) setSearchQuery(initial.query);
+
         return () => window.removeEventListener('hashchange', onHash);
     }, []);
 
     const navigate = (path: string | null) => {
-        window.location.hash = path ? `/${path}` : '/';
+        // Preserve the active search filter across navigations so that
+        // clicking a result in a filtered sidebar opens the page with
+        // the same filter still applied.
+        window.location.hash = buildHash(path, searchQuery);
     };
 
     const openPage = async (path: string) => {
@@ -202,6 +251,12 @@ export function App() {
     };
 
     const handleSearch = async () => {
+        // Pressing Enter is an explicit commit — push a history entry
+        // for the current query so Back undoes the filter session.
+        const current = parseHash();
+        if (current.query !== searchQuery) {
+            window.history.pushState(null, '', '#' + buildHash(current.path, searchQuery));
+        }
         if (!searchQuery.trim()) {
             loadPages();
             return;
@@ -375,7 +430,12 @@ export function App() {
                 style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
             >
                 <div class="sidebar-header">
-                    <span class="sidebar-header-text">mind-map</span>
+                    <a
+                        href="#/"
+                        class="sidebar-header-text"
+                        onClick={(e) => { e.preventDefault(); navigate(null); }}
+                        title="Show graph view"
+                    >mind-map</a>
                     <button
                         class="sidebar-collapse-btn"
                         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -557,7 +617,12 @@ export function App() {
                         )}
                     </>
                 ) : (
-                    <GraphView onNavigate={navigate} />
+                    <GraphView
+                        pages={rawPages}
+                        searchQuery={searchQuery}
+                        onNavigate={navigate}
+                        onSearch={commitSearch}
+                    />
                 )}
             </div>
         </div>

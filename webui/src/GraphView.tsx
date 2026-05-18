@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import ForceGraph from 'force-graph';
 import { Page, Link, api } from './mcp';
+import { searchTokens, searchRegex } from './search';
 
 type EdgeKind = 'path' | 'reference';
 
@@ -72,14 +73,39 @@ function readCssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
 
-interface GraphViewProps {
-    onNavigate: (path: string) => void;
+// Greedy word-wrap a label to a maximum width (in canvas units).
+// Words that on their own exceed maxWidth pass through unbroken; we
+// don't try to hyphenate, the goal is readability not perfection.
+function wrapLabel(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+    if (!text) return [''];
+    if (ctx.measureText(text).width <= maxWidth) return [text];
+
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let current = '';
+    for (const w of words) {
+        const candidate = current ? current + ' ' + w : w;
+        if (ctx.measureText(candidate).width <= maxWidth) {
+            current = candidate;
+        } else {
+            if (current) lines.push(current);
+            current = w;
+        }
+    }
+    if (current) lines.push(current);
+    return lines;
 }
 
-export function GraphView({ onNavigate }: GraphViewProps) {
+interface GraphViewProps {
+    pages: Page[];
+    searchQuery: string;
+    onNavigate: (path: string) => void;
+    onSearch: (query: string) => void;
+}
+
+export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphViewProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const graphRef = useRef<any>(null);
-    const [pages, setPages] = useState<Page[]>([]);
     const [refs, setRefs] = useState<Link[]>([]);
     const [showPaths, setShowPaths] = useState(() => localStorage.getItem('mm-graph-show-paths') !== 'false');
     const [showRefs, setShowRefs] = useState(() => localStorage.getItem('mm-graph-show-refs') !== 'false');
@@ -91,33 +117,85 @@ export function GraphView({ onNavigate }: GraphViewProps) {
         localStorage.setItem('mm-graph-show-refs', String(showRefs));
     }, [showRefs]);
 
-    // Fetch pages + links once on mount.
+    // Reference edges still come from the full /api/links table — they
+    // describe wikilink relationships, not search-filtered subsets.
     useEffect(() => {
         let cancelled = false;
-        Promise.all([api.listPages(), api.allLinks()]).then(([p, l]) => {
+        api.allLinks().then(l => {
             if (cancelled) return;
-            setPages(p);
             setRefs(l);
-        }).catch(e => console.error('graph load failed:', e));
+        }).catch(e => console.error('graph links load failed:', e));
         return () => { cancelled = true; };
     }, []);
 
     const fullGraph = useMemo(() => buildGraph(pages, refs), [pages, refs]);
 
+    // Filter by search query: a node passes if its label, page title,
+    // or any path segment matches a search token. Folder nodes that
+    // contain a matching descendant also pass so the path stays
+    // visible. Edges are kept only when both endpoints pass.
     const visibleGraph = useMemo(() => {
-        const links = fullGraph.links.filter(l =>
-            (l.kind === 'path' && showPaths) || (l.kind === 'reference' && showRefs)
-        );
-        return { nodes: fullGraph.nodes, links };
-    }, [fullGraph, showPaths, showRefs]);
+        const re = searchRegex(searchTokens(searchQuery));
+        let allowedIds: Set<string> | null = null;
+        if (re) {
+            const matches = new Set<string>();
+            for (const n of fullGraph.nodes) {
+                const haystack = `${n.id} ${n.label} ${n.page?.title || ''}`;
+                re.lastIndex = 0;
+                if (re.test(haystack)) {
+                    // Add the node and every ancestor path-prefix so the
+                    // chain back to root remains drawable.
+                    const parts = n.id.split('/');
+                    let accum = '';
+                    for (const p of parts) {
+                        accum = accum ? accum + '/' + p : p;
+                        matches.add(accum);
+                    }
+                }
+            }
+            allowedIds = matches;
+        }
+
+        const nodes = allowedIds
+            ? fullGraph.nodes.filter(n => allowedIds!.has(n.id))
+            : fullGraph.nodes;
+
+        const links = fullGraph.links.filter(l => {
+            if (l.kind === 'path' && !showPaths) return false;
+            if (l.kind === 'reference' && !showRefs) return false;
+            if (allowedIds) {
+                const src = typeof l.source === 'string' ? l.source : (l.source as any).id;
+                const tgt = typeof l.target === 'string' ? l.target : (l.target as any).id;
+                if (!allowedIds.has(src) || !allowedIds.has(tgt)) return false;
+            }
+            return true;
+        });
+
+        return { nodes, links };
+    }, [fullGraph, showPaths, showRefs, searchQuery]);
 
     // Mount the force-graph instance once; feed it new data on changes.
     useEffect(() => {
         if (!containerRef.current) return;
-        const accent = readCssVar('--accent');
-        const fg = readCssVar('--fg');
-        const fgDim = readCssVar('--fg-dim');
-        const border = readCssVar('--border');
+
+        // Hold theme colors in a ref so per-frame callbacks always read
+        // the latest values when the user toggles light/dark.
+        const colors = {
+            accent: readCssVar('--accent'),
+            fg: readCssVar('--fg'),
+            fgDim: readCssVar('--fg-dim'),
+            edgePath: readCssVar('--graph-edge-path'),
+            edgeRef: readCssVar('--graph-edge-ref'),
+            font: readCssVar('--font') || 'Inter, sans-serif',
+        };
+        const refreshColors = () => {
+            colors.accent = readCssVar('--accent');
+            colors.fg = readCssVar('--fg');
+            colors.fgDim = readCssVar('--fg-dim');
+            colors.edgePath = readCssVar('--graph-edge-path');
+            colors.edgeRef = readCssVar('--graph-edge-ref');
+            colors.font = readCssVar('--font') || 'Inter, sans-serif';
+        };
 
         const el = containerRef.current;
         const g: any = new (ForceGraph as any)(el);
@@ -127,33 +205,52 @@ export function GraphView({ onNavigate }: GraphViewProps) {
             .width(el.clientWidth || 800)
             .height(el.clientHeight || 600)
             .backgroundColor('rgba(0,0,0,0)')
-            .nodeRelSize(4)
-            .nodeVal((n: GraphNode) => (n.isPage ? 4 : 2))
-            .nodeColor((n: GraphNode) => (n.isPage ? accent : fgDim))
+            .nodeRelSize(2.5)
+            .nodeVal((n: GraphNode) => (n.isPage ? 1.5 : 0.6))
+            .nodeColor((n: GraphNode) => (n.isPage ? colors.accent : colors.fgDim))
             .nodeLabel((n: GraphNode) => n.page?.title || n.label || n.id)
-            .linkColor((l: GraphLink) => (l.kind === 'reference' ? accent : border))
-            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 1.5 : 0.5))
+            .linkColor((l: GraphLink) => (l.kind === 'reference' ? colors.edgeRef : colors.edgePath))
+            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 2 : 1))
             .linkDirectionalArrowLength((l: GraphLink) => (l.kind === 'reference' ? 4 : 0))
             .linkDirectionalArrowRelPos(0.9)
             .nodeCanvasObjectMode(() => 'after')
             .nodeCanvasObject((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-                // Only draw labels above a zoom threshold so the graph
-                // stays readable when fully zoomed out.
                 if (globalScale < 1.4) return;
                 const label = node.page?.title || node.label || node.id;
                 const fontSize = 11 / globalScale;
-                ctx.font = `${fontSize}px Inter, sans-serif`;
-                // Always use --fg for label text. Folder nodes are filled
-                // with --fg-dim, so labeling them in --fg-dim made them
-                // invisible against their own background.
-                ctx.fillStyle = fg;
+                // Metro-style: light weight, clean sans-serif.
+                ctx.font = `300 ${fontSize}px ${colors.font}`;
+                const radius = Math.sqrt(node.isPage ? 1.5 : 0.6) * 2.5;
+                const gap = 2 / globalScale;
+                const maxWidth = 80 / globalScale;
+                const lineHeight = fontSize * 1.15;
+                const lines = wrapLabel(ctx, label, maxWidth);
+
                 ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(label, node.x || 0, node.y || 0);
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = colors.fg;
+                const startY = (node.y || 0) + radius + gap;
+                for (let i = 0; i < lines.length; i++) {
+                    ctx.fillText(lines[i], node.x || 0, startY + i * lineHeight);
+                }
             })
             .onNodeClick((n: GraphNode) => {
                 if (n.page) onNavigate(n.id);
+                else onSearch(n.id);
             });
+
+        // Watch <html> for theme class changes; refresh cached colors
+        // and nudge the simulation so the canvas repaints with the new
+        // palette even if the layout has already cooled down.
+        const themeObserver = new MutationObserver(() => {
+            refreshColors();
+            if (graphRef.current) {
+                // Re-feed the current data to force-graph to trigger a
+                // repaint with the new colors.
+                graphRef.current.graphData(graphRef.current.graphData());
+            }
+        });
+        themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
         // Track container size for ResizeObserver-driven re-fit.
         const ro = new ResizeObserver(() => {
@@ -165,6 +262,7 @@ export function GraphView({ onNavigate }: GraphViewProps) {
 
         return () => {
             ro.disconnect();
+            themeObserver.disconnect();
             if (typeof g._destructor === 'function') g._destructor();
             el.innerHTML = '';
             graphRef.current = null;
