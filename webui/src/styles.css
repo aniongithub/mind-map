@@ -231,6 +231,18 @@ html, body, #root {
 .page-header {
     padding: 32px 40px 16px;
     border-bottom: 1px solid var(--border);
+    position: relative;
+}
+
+.page-header-logo {
+    position: absolute;
+    top: 20px;
+    right: 32px;
+    color: var(--fg-dim);
+    opacity: 0.6;
+    pointer-events: none;
+    display: inline-flex;
+    align-items: center;
 }
 
 .page-title {
@@ -592,12 +604,15 @@ mark {
 
 .empty {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 16px;
     flex: 1;
     color: var(--fg-dim);
     font-size: 16px;
     font-weight: 300;
+    opacity: 0.6;
 }
 
 /* --- Mobile --- */
