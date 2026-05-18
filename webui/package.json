@@ -4,6 +4,7 @@
     "dev": "webpack --mode development --config webpack.config.js --watch"
   },
   "dependencies": {
+    "force-graph": "^1.51.4",
     "marked": "^15.0.0",
     "mermaid": "^11.14.0",
     "preact": "^10.25.0"

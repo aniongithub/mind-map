@@ -325,6 +325,37 @@ func (w *Wiki) GetBacklinks(ctx context.Context, pagePath string) ([]string, err
 	return w.getBacklinks(ctx, pagePath)
 }
 
+// Link is a single source→target edge between two pages.
+type Link struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// AllLinks returns every wikilink edge in the index. Used by the graph
+// view to render reference edges without a per-page round-trip.
+func (w *Wiki) AllLinks(ctx context.Context) ([]Link, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err := w.db.QueryContext(ctx, "SELECT source, target FROM links")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []Link
+	for rows.Next() {
+		var l Link
+		if err := rows.Scan(&l.Source, &l.Target); err != nil {
+			slog.Warn("all links scan error", slog.Any("error", err))
+			continue
+		}
+		links = append(links, l)
+	}
+	return links, nil
+}
+
 // Context returns a WikiContext overview.
 func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	if err := ctx.Err(); err != nil {

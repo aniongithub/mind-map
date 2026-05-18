@@ -1,60 +1,13 @@
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './mcp';
 import { Logo } from './Logo';
+import { PageBrowser } from './PageBrowser';
+import { GraphView } from './GraphView';
+import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
-
-// Tokenize a free-form search query the same way the FTS index does:
-//   - "quoted phrases" become a single token (so they highlight as a
-//     phrase and pass through to FTS5 as a phrase match)
-//   - bare runs of non-whitespace become individual tokens
-//   - leading/trailing punctuation on bare tokens is stripped
-//   - empty tokens are dropped
-function searchTokens(query: string): string[] {
-    const tokens: string[] = [];
-    const re = /"([^"]+)"|(\S+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(query)) !== null) {
-        const tok = m[1] !== undefined
-            ? m[1].trim()
-            : m[2].replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, '');
-        if (tok) tokens.push(tok);
-    }
-    return tokens;
-}
-
-function searchRegex(tokens: string[]): RegExp | null {
-    if (tokens.length === 0) return null;
-    // Escape regex metacharacters, then collapse interior whitespace in
-    // phrase tokens to \s+ so "MCP server" still matches even if the
-    // rendered text has a newline or extra spaces between the words.
-    const escaped = tokens.map(t =>
-        t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-            .replace(/\s+/g, '\\s+')
-    );
-    return new RegExp(`(${escaped.join('|')})`, 'giu');
-}
-
-// Renders plain text with each search-query token wrapped in <mark>.
-// Use this for any place that renders user-supplied text directly
-// (sidebar items, page header). The body uses highlightHTML instead
-// because it needs to highlight inside marked-rendered HTML.
-function Highlighted({ text, query }: { text: string; query: string }) {
-    const re = searchRegex(searchTokens(query));
-    if (!re || !text) return <>{text}</>;
-    const parts: (string | { mark: string })[] = [];
-    let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-        if (m.index > last) parts.push(text.slice(last, m.index));
-        parts.push({ mark: m[0] });
-        last = m.index + m[0].length;
-    }
-    if (last < text.length) parts.push(text.slice(last));
-    return <>{parts.map((p, i) => typeof p === 'string' ? p : <mark key={i}>{p.mark}</mark>)}</>;
-}
 
 interface SyncSettings {
     enabled: boolean;
@@ -92,7 +45,6 @@ async function requestRestart(): Promise<void> {
 }
 
 export function App() {
-    const [pages, setPages] = useState<Page[]>([]);
     const [current, setCurrent] = useState<Page | null>(null);
     const [editing, setEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
@@ -157,60 +109,12 @@ export function App() {
         localStorage.setItem('mm-backlinks-collapsed', String(backlinksCollapsed));
     }, [backlinksCollapsed]);
 
-    // Sort mode: 'recent' | 'path' | 'title'
-    type SortMode = 'recent' | 'path' | 'title';
-    const sortModes: SortMode[] = ['recent', 'path', 'title'];
-    const sortLabels: Record<SortMode, string> = { recent: 'Recent', path: 'A→Z path', title: 'A→Z title' };
-
-    const SortIcon = ({ mode }: { mode: SortMode }) => {
-        const props = { width: 16, height: 16, fill: 'currentColor', viewBox: '' as string };
-        switch (mode) {
-            case 'recent':
-                return <svg {...props} viewBox="-5 -10 110 110"><path d="m54.871 6.9883c-1.5664 0-3.1367 0.066407-4.707 0.18359-4.1836 0.39453-8.3438 1.418-12.355 3.082-13.742 5.6992-23.395 18.035-25.883 32.383l-2.543-2.8828-2.0234-2.2969-4.5781 4.0508 2.0117 2.2969 9.1406 10.344 11.043-8.3711 2.4375-1.8477-3.6875-4.8711-2.4375 1.8438-3.2891 2.4961c2.2109-12.195 10.449-22.637 22.156-27.492 13.777-5.7148 29.605-2.5625 40.152 7.9961 10.543 10.562 13.688 26.43 7.9805 40.227-5.707 13.801-19.125 22.777-34.035 22.777h-3.0586v6.1133h3.0586c17.371 0 33.055-10.492 39.703-26.559 6.6445-16.066 2.9688-34.582-9.3125-46.883-8.0586-8.0703-18.805-12.43-29.77-12.594zm-0.61328 19.598c-12.879 0-23.383 10.531-23.383 23.426s10.504 23.41 23.383 23.41c12.879 0 23.383-10.516 23.383-23.41s-10.504-23.426-23.383-23.426zm-1.7266 10.449h6.1133v11.184l2.9141 4.1914 1.7422 2.5156-5.0312 3.4805-1.7422-2.5156-3.9961-5.7656z"/></svg>;
-            case 'path':
-                return <svg {...props} viewBox="26 -26 100 100"><path fill-rule="evenodd" clip-rule="evenodd" d="M114.9,5.7c-1.4,1.5-3.7,1.5-5.1,0L100.5-4v64.5c0,2-1.6,3.6-3.6,3.6s-3.6-1.6-3.6-3.6V-4l-9.3,9.7  c-1.4,1.5-3.7,1.5-5.1,0c-1.4-1.5-1.4-3.9,0-5.4l15.1-15.9c0,0,0,0,0.1-0.1l0.2-0.2c0,0,0,0,0,0c0.6-0.7,1.5-1.1,2.5-1.1  c1,0,1.9,0.4,2.6,1.1c0,0,0,0,0,0c0,0,0,0,0,0c0,0,0,0,0,0l15.4,16.2C116.3,1.8,116.3,4.2,114.9,5.7z M56.9,62.6  C56.9,62.6,56.9,62.6,56.9,62.6l-0.3,0.3c0,0,0,0,0,0c-0.6,0.7-1.5,1.1-2.5,1.1c-1,0-1.9-0.4-2.6-1.1c0,0,0,0,0,0c0,0,0,0,0,0  c0,0,0,0,0,0L36.1,46.7c-1.4-1.5-1.4-3.9,0-5.4c1.4-1.5,3.7-1.5,5.1,0l9.3,9.7v-64.5c0-2,1.6-3.6,3.6-3.6c2,0,3.6,1.6,3.6,3.6V51  l9.3-9.7c1.4-1.5,3.7-1.5,5.1,0c1.4,1.5,1.4,3.9,0,5.4L56.9,62.6z"/></svg>;
-            case 'title':
-                return <svg {...props} viewBox="0 0 100 96"><path d="M26.672,17.764C26.14,16.116,24.604,15,22.868,15c-1.732,0-3.264,1.116-3.8,2.756l-18.872,58  c-0.68,2.096,0.468,4.36,2.572,5.049C3.18,80.936,3.596,81,4.008,81c1.684,0,3.252-1.072,3.804-2.756L12.12,65h21.508l4.304,13.236  c0.684,2.1,2.932,3.252,5.04,2.576c2.096-0.681,3.248-2.937,2.568-5.045L26.672,17.764z M14.712,57l8.156-25.072L31.02,57H14.712z"/><path d="M95.8,73H64.973L99.1,23.264c0.84-1.232,0.928-2.82,0.24-4.132S97.284,17,95.8,17h-32c-2.208,0-4,1.788-4,4s1.792,4,4,4  h24.408L54.08,74.736c-0.84,1.231-0.932,2.812-0.248,4.123C54.527,80.18,55.893,81,57.376,81H95.8c2.212,0,4-1.788,4-4  S98,73,95.8,73L95.8,73z"/><path d="M58.584,55.624l8-7.756c0.768-0.752,1.216-1.792,1.216-2.88c0-1.084-0.436-2.112-1.216-2.876l-8-7.752  c-1.588-1.54-4.12-1.5-5.656,0.088c-1.539,1.584-1.496,4.112,0.084,5.656l0.916,0.88H43.804c-2.208,0-4,1.788-4,4s1.792,4,4,4  h10.124l-0.916,0.875c-1.584,1.541-1.623,4.072-0.084,5.66c0.78,0.813,1.828,1.225,2.872,1.225  C56.8,56.752,57.809,56.376,58.584,55.624z"/></svg>;
-        }
-    };
-
-    const [sortMode, setSortMode] = useState<SortMode>(() => {
-        const saved = localStorage.getItem('mm-sort-mode');
-        return (saved === 'path' || saved === 'title') ? saved : 'recent';
-    });
-
-    useEffect(() => {
-        localStorage.setItem('mm-sort-mode', sortMode);
-    }, [sortMode]);
-
-    const cycleSortMode = () => {
-        const idx = sortModes.indexOf(sortMode);
-        setSortMode(sortModes[(idx + 1) % sortModes.length]);
-    };
-
-    const sortPages = (list: Page[]): Page[] => {
-        const sorted = [...list];
-        switch (sortMode) {
-            case 'path':
-                sorted.sort((a, b) => a.path.localeCompare(b.path));
-                break;
-            case 'title':
-                sorted.sort((a, b) => (a.title || a.path).localeCompare(b.title || b.path));
-                break;
-            case 'recent':
-            default:
-                // API already returns modified DESC; preserve that order
-                break;
-        }
-        return sorted;
-    };
-
     useEffect(() => {
         document.documentElement.classList.toggle('dark', isDark);
         localStorage.setItem('mm-theme', isDark ? 'dark' : 'light');
     }, [isDark]);
 
-    // Load page list
+    // Load page list (raw, in API order). PageBrowser handles sorting.
     const [rawPages, setRawPages] = useState<Page[]>([]);
 
     const loadPages = async () => {
@@ -222,16 +126,35 @@ export function App() {
         }
     };
 
-    // Re-sort whenever rawPages or sortMode changes
-    useEffect(() => {
-        setPages(sortPages(rawPages));
-    }, [rawPages, sortMode]);
-
     // Persist search query so it survives reload; on first mount restore
-    // either the filtered list (if a query was saved) or the full page list.
+    // either the filtered list (if a query was saved) or the full page
+    // list. The URL takes precedence over localStorage (handled in the
+    // hash routing effect below).
     useEffect(() => {
         localStorage.setItem('mm-search-query', searchQuery);
     }, [searchQuery]);
+
+    // Mirror searchQuery into the URL hash so the filter is bookmarkable
+    // and reloads restore it. Live typing replaces in place so we don't
+    // pollute history with every keystroke — explicit commits (Enter,
+    // clicking a gray node) call commitSearch() instead to push a new
+    // entry.
+    useEffect(() => {
+        const current = parseHash();
+        if (current.query === searchQuery) return;
+        const newHash = buildHash(current.path, searchQuery);
+        window.history.replaceState(null, '', '#' + newHash);
+    }, [searchQuery]);
+
+    // Push a new history entry, then update the query. Use this for
+    // user actions that "commit" a filter so Back undoes the action.
+    const commitSearch = (query: string) => {
+        const current = parseHash();
+        if (current.query !== query) {
+            window.history.pushState(null, '', '#' + buildHash(current.path, query));
+        }
+        setSearchQuery(query);
+    };
 
     useEffect(() => {
         if (searchQuery.trim()) {
@@ -241,27 +164,52 @@ export function App() {
         }
     }, []);
 
-    // Hash routing
-    const getHashPath = (): string | null => {
-        const hash = window.location.hash.replace(/^#\/?/, '');
-        return hash || null;
+    // Hash routing: #/path/to/page?q=filter
+    // The hash carries two pieces of state: the currently-open page
+    // (or null for the graph view) and the active search filter. Both
+    // are reflected in the URL so back/forward navigation and reloads
+    // restore the same view.
+    const parseHash = (): { path: string | null; query: string } => {
+        const raw = window.location.hash.replace(/^#/, '');
+        const qIdx = raw.indexOf('?');
+        const pathPart = (qIdx >= 0 ? raw.slice(0, qIdx) : raw).replace(/^\//, '');
+        const queryPart = qIdx >= 0 ? raw.slice(qIdx + 1) : '';
+        const params = new URLSearchParams(queryPart);
+        return { path: pathPart || null, query: params.get('q') || '' };
+    };
+
+    const buildHash = (path: string | null, query: string): string => {
+        const p = path ? `/${path}` : '/';
+        const q = query.trim();
+        return q ? `${p}?q=${encodeURIComponent(q)}` : p;
     };
 
     useEffect(() => {
         const onHash = () => {
-            const path = getHashPath();
+            const { path, query } = parseHash();
             if (path) openPage(path);
             else setCurrent(null);
+            // setState is a no-op when the value matches, so this won't
+            // ping-pong with the searchQuery→URL writer effect below.
+            setSearchQuery(query);
         };
         window.addEventListener('hashchange', onHash);
-        // Load initial page from hash
-        const initial = getHashPath();
-        if (initial) openPage(initial);
+
+        // Load initial state. URL wins over localStorage: a query in
+        // the hash means the user is sharing/reloading a filtered view
+        // and we should honor it exactly.
+        const initial = parseHash();
+        if (initial.path) openPage(initial.path);
+        if (initial.query) setSearchQuery(initial.query);
+
         return () => window.removeEventListener('hashchange', onHash);
     }, []);
 
     const navigate = (path: string | null) => {
-        window.location.hash = path ? `/${path}` : '/';
+        // Preserve the active search filter across navigations so that
+        // clicking a result in a filtered sidebar opens the page with
+        // the same filter still applied.
+        window.location.hash = buildHash(path, searchQuery);
     };
 
     const openPage = async (path: string) => {
@@ -303,6 +251,12 @@ export function App() {
     };
 
     const handleSearch = async () => {
+        // Pressing Enter is an explicit commit — push a history entry
+        // for the current query so Back undoes the filter session.
+        const current = parseHash();
+        if (current.query !== searchQuery) {
+            window.history.pushState(null, '', '#' + buildHash(current.path, searchQuery));
+        }
         if (!searchQuery.trim()) {
             loadPages();
             return;
@@ -466,7 +420,7 @@ export function App() {
         }
     }, [renderedBodyHTML]);
 
-    const pageCount = pages.length;
+    const pageCount = rawPages.length;
 
     return (
         <div class="app">
@@ -476,7 +430,12 @@ export function App() {
                 style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
             >
                 <div class="sidebar-header">
-                    <span class="sidebar-header-text">mind-map</span>
+                    <a
+                        href="#/"
+                        class="sidebar-header-text"
+                        onClick={(e) => { e.preventDefault(); navigate(null); }}
+                        title="Show graph view"
+                    >mind-map</a>
                     <button
                         class="sidebar-collapse-btn"
                         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -487,48 +446,15 @@ export function App() {
                 </div>
                 {!sidebarCollapsed && (
                     <>
-                        <div class="sidebar-search">
-                            <div class="search-wrapper">
-                                <div class="search-input-wrap">
-                                    <input
-                                        type="text"
-                                        placeholder="search..."
-                                        value={searchQuery}
-                                        onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                                    />
-                                    {searchQuery && (
-                                        <button
-                                            class="search-clear"
-                                            onClick={() => { setSearchQuery(''); loadPages(); }}
-                                            title="Clear search"
-                                            aria-label="Clear search"
-                                        >
-                                            &times;
-                                        </button>
-                                    )}
-                                </div>
-                                <button
-                                    class="sort-toggle"
-                                    onClick={cycleSortMode}
-                                    title={`Sort: ${sortLabels[sortMode]}`}
-                                >
-                                    <SortIcon mode={sortMode} />
-                                </button>
-                            </div>
-                        </div>
-                        <ul class="page-list">
-                            {pages.map(p => (
-                                <li
-                                    key={p.path}
-                                    class={`page-item ${current?.path === p.path ? 'active' : ''}`}
-                                    onClick={() => navigate(p.path)}
-                                >
-                                    <div class="page-item-title"><Highlighted text={p.title || p.path} query={searchQuery} /></div>
-                                    <div class="page-item-path"><Highlighted text={p.path} query={searchQuery} /></div>
-                                </li>
-                            ))}
-                        </ul>
+                        <PageBrowser
+                            pages={rawPages}
+                            searchQuery={searchQuery}
+                            onSearchChange={setSearchQuery}
+                            onSearchSubmit={handleSearch}
+                            onSearchClear={() => { setSearchQuery(''); loadPages(); }}
+                            currentPath={current?.path}
+                            onNavigate={navigate}
+                        />
                         <div class="status-bar">
                             <span>{pageCount} pages</span>
                             <div class="status-bar-left">
@@ -691,10 +617,12 @@ export function App() {
                         )}
                     </>
                 ) : (
-                    <div class="empty">
-                        <Logo size={96} />
-                        <span>select a page</span>
-                    </div>
+                    <GraphView
+                        pages={rawPages}
+                        searchQuery={searchQuery}
+                        onNavigate={navigate}
+                        onSearch={commitSearch}
+                    />
                 )}
             </div>
         </div>

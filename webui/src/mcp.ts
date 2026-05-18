@@ -76,6 +76,17 @@ class APIClient {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
     }
+
+    async allLinks(): Promise<Link[]> {
+        const res = await fetch('/api/links');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) || [];
+    }
+}
+
+export interface Link {
+    source: string;
+    target: string;
 }
 
 export const api = new APIClient();
