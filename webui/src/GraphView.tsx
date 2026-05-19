@@ -73,6 +73,38 @@ function readCssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
 
+// Append an alpha component to a CSS color. Handles #rgb, #rgba, #rrggbb,
+// #rrggbbaa, and rgb()/rgba() forms. Falls back to the original color if
+// the format isn't recognized (so theme tweaks can't crash the renderer).
+function withAlpha(color: string, alpha: number): string {
+    const c = color.trim();
+    const a = Math.max(0, Math.min(1, alpha));
+    if (c.startsWith('#')) {
+        const hex = c.slice(1);
+        let r = 0, g = 0, b = 0;
+        if (hex.length === 3 || hex.length === 4) {
+            r = parseInt(hex[0] + hex[0], 16);
+            g = parseInt(hex[1] + hex[1], 16);
+            b = parseInt(hex[2] + hex[2], 16);
+        } else if (hex.length === 6 || hex.length === 8) {
+            r = parseInt(hex.slice(0, 2), 16);
+            g = parseInt(hex.slice(2, 4), 16);
+            b = parseInt(hex.slice(4, 6), 16);
+        } else {
+            return c;
+        }
+        return `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
+    const m = c.match(/^rgba?\(([^)]+)\)$/i);
+    if (m) {
+        const parts = m[1].split(',').map(s => s.trim());
+        if (parts.length >= 3) {
+            return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+        }
+    }
+    return c;
+}
+
 // Greedy word-wrap a label to a maximum width (in canvas units).
 // Words that on their own exceed maxWidth pass through unbroken; we
 // don't try to hyphenate, the goal is readability not perfection.
@@ -209,9 +241,16 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
             .nodeVal((n: GraphNode) => (n.isPage ? 1.5 : 0.6))
             .nodeColor((n: GraphNode) => (n.isPage ? colors.accent : colors.fgDim))
             .nodeLabel((n: GraphNode) => n.page?.title || n.label || n.id)
-            .linkColor((l: GraphLink) => (l.kind === 'reference' ? colors.edgeRef : colors.edgePath))
-            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 2 : 1))
-            .linkDirectionalArrowLength((l: GraphLink) => (l.kind === 'reference' ? 4 : 0))
+            // Edges are translucent so they don't visually merge with
+            // nodes of the same color. Path edges get slightly more
+            // weight to balance their lower contrast.
+            .linkColor((l: GraphLink) => withAlpha(
+                l.kind === 'reference' ? colors.edgeRef : colors.edgePath,
+                l.kind === 'reference' ? 0.55 : 0.5,
+            ))
+            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 2 : 1.5))
+            .linkDirectionalArrowLength((l: GraphLink) => (l.kind === 'reference' ? 2.5 : 0))
+            .linkDirectionalArrowColor((l: GraphLink) => (l.kind === 'reference' ? colors.edgeRef : colors.edgePath))
             .linkDirectionalArrowRelPos(0.9)
             .nodeCanvasObjectMode(() => 'after')
             .nodeCanvasObject((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -275,6 +314,12 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
         graphRef.current.graphData(visibleGraph);
     }, [visibleGraph]);
 
+    const handleFitAll = () => {
+        // 400ms tween, 40px padding around the bounding box of all
+        // currently-rendered nodes.
+        if (graphRef.current) graphRef.current.zoomToFit(400, 40);
+    };
+
     return (
         <div class="graph-view">
             <div class="graph-toolbar">
@@ -296,6 +341,14 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
                     <span class="graph-swatch graph-swatch-ref" aria-hidden="true"></span>
                     references
                 </label>
+                <button
+                    type="button"
+                    class="graph-fit"
+                    onClick={handleFitAll}
+                    title="Fit all visible nodes in view"
+                >
+                    fit all
+                </button>
             </div>
             <div class="graph-canvas" ref={containerRef} />
         </div>
