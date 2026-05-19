@@ -73,6 +73,24 @@ function readCssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
 
+interface SavedView {
+    k: number;
+    x: number;
+    y: number;
+}
+
+function readSavedView(): SavedView | null {
+    try {
+        const raw = localStorage.getItem('mm-graph-view');
+        if (!raw) return null;
+        const v = JSON.parse(raw);
+        if (typeof v?.k === 'number' && typeof v?.x === 'number' && typeof v?.y === 'number') {
+            return v;
+        }
+    } catch { /* corrupt entry — ignore */ }
+    return null;
+}
+
 // Append an alpha component to a CSS color. Handles #rgb, #rgba, #rrggbb,
 // #rrggbbaa, and rgb()/rgba() forms. Falls back to the original color if
 // the format isn't recognized (so theme tweaks can't crash the renderer).
@@ -277,6 +295,34 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
                 if (n.page) onNavigate(n.id);
                 else onSearch(n.id);
             });
+
+        // Restore saved zoom/pan, or fit-all on first layout settle.
+        // We track this with a closure-local flag so subsequent
+        // simulation kicks (e.g. theme changes that re-feed data)
+        // don't keep snapping the view back to the auto-fit.
+        let initialViewApplied = false;
+        const savedView = readSavedView();
+        if (savedView) {
+            g.centerAt(savedView.x, savedView.y, 0);
+            g.zoom(savedView.k, 0);
+            initialViewApplied = true;
+        }
+        g.onEngineStop(() => {
+            if (!initialViewApplied) {
+                g.zoomToFit(400, 40);
+                initialViewApplied = true;
+            }
+        });
+        g.onZoomEnd((t: { k: number; x: number; y: number }) => {
+            // Persist the user's view so reloads keep their place.
+            // Skip until the initial view is applied — the first few
+            // ZoomEnd events fire during the auto-fit animation and
+            // would clobber the meaningful saved state.
+            if (!initialViewApplied) return;
+            try {
+                localStorage.setItem('mm-graph-view', JSON.stringify(t));
+            } catch { /* quota / unavailable — silent */ }
+        });
 
         // Watch <html> for theme class changes; refresh cached colors
         // and nudge the simulation so the canvas repaints with the new
