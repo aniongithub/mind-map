@@ -73,6 +73,56 @@ function readCssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
 
+interface SavedView {
+    k: number;
+    x: number;
+    y: number;
+}
+
+function readSavedView(): SavedView | null {
+    try {
+        const raw = localStorage.getItem('mm-graph-view');
+        if (!raw) return null;
+        const v = JSON.parse(raw);
+        if (typeof v?.k === 'number' && typeof v?.x === 'number' && typeof v?.y === 'number') {
+            return v;
+        }
+    } catch { /* corrupt entry — ignore */ }
+    return null;
+}
+
+// Append an alpha component to a CSS color. Handles #rgb, #rgba, #rrggbb,
+// #rrggbbaa, and rgb()/rgba() forms. Falls back to the original color if
+// the format isn't recognized (so theme tweaks can't crash the renderer).
+function withAlpha(color: string, alpha: number): string {
+    const c = color.trim();
+    const a = Math.max(0, Math.min(1, alpha));
+    if (c.startsWith('#')) {
+        const hex = c.slice(1);
+        let r = 0, g = 0, b = 0;
+        if (hex.length === 3 || hex.length === 4) {
+            r = parseInt(hex[0] + hex[0], 16);
+            g = parseInt(hex[1] + hex[1], 16);
+            b = parseInt(hex[2] + hex[2], 16);
+        } else if (hex.length === 6 || hex.length === 8) {
+            r = parseInt(hex.slice(0, 2), 16);
+            g = parseInt(hex.slice(2, 4), 16);
+            b = parseInt(hex.slice(4, 6), 16);
+        } else {
+            return c;
+        }
+        return `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
+    const m = c.match(/^rgba?\(([^)]+)\)$/i);
+    if (m) {
+        const parts = m[1].split(',').map(s => s.trim());
+        if (parts.length >= 3) {
+            return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+        }
+    }
+    return c;
+}
+
 // Greedy word-wrap a label to a maximum width (in canvas units).
 // Words that on their own exceed maxWidth pass through unbroken; we
 // don't try to hyphenate, the goal is readability not perfection.
@@ -209,9 +259,16 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
             .nodeVal((n: GraphNode) => (n.isPage ? 1.5 : 0.6))
             .nodeColor((n: GraphNode) => (n.isPage ? colors.accent : colors.fgDim))
             .nodeLabel((n: GraphNode) => n.page?.title || n.label || n.id)
-            .linkColor((l: GraphLink) => (l.kind === 'reference' ? colors.edgeRef : colors.edgePath))
-            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 2 : 1))
-            .linkDirectionalArrowLength((l: GraphLink) => (l.kind === 'reference' ? 4 : 0))
+            // Edges are translucent so they don't visually merge with
+            // nodes of the same color. Path edges get slightly more
+            // weight to balance their lower contrast.
+            .linkColor((l: GraphLink) => withAlpha(
+                l.kind === 'reference' ? colors.edgeRef : colors.edgePath,
+                l.kind === 'reference' ? 0.55 : 0.5,
+            ))
+            .linkWidth((l: GraphLink) => (l.kind === 'reference' ? 2 : 1.5))
+            .linkDirectionalArrowLength((l: GraphLink) => (l.kind === 'reference' ? 2.5 : 0))
+            .linkDirectionalArrowColor((l: GraphLink) => (l.kind === 'reference' ? colors.edgeRef : colors.edgePath))
             .linkDirectionalArrowRelPos(0.9)
             .nodeCanvasObjectMode(() => 'after')
             .nodeCanvasObject((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -238,6 +295,34 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
                 if (n.page) onNavigate(n.id);
                 else onSearch(n.id);
             });
+
+        // Restore saved zoom/pan, or fit-all on first layout settle.
+        // We track this with a closure-local flag so subsequent
+        // simulation kicks (e.g. theme changes that re-feed data)
+        // don't keep snapping the view back to the auto-fit.
+        let initialViewApplied = false;
+        const savedView = readSavedView();
+        if (savedView) {
+            g.centerAt(savedView.x, savedView.y, 0);
+            g.zoom(savedView.k, 0);
+            initialViewApplied = true;
+        }
+        g.onEngineStop(() => {
+            if (!initialViewApplied) {
+                g.zoomToFit(400, 40);
+                initialViewApplied = true;
+            }
+        });
+        g.onZoomEnd((t: { k: number; x: number; y: number }) => {
+            // Persist the user's view so reloads keep their place.
+            // Skip until the initial view is applied — the first few
+            // ZoomEnd events fire during the auto-fit animation and
+            // would clobber the meaningful saved state.
+            if (!initialViewApplied) return;
+            try {
+                localStorage.setItem('mm-graph-view', JSON.stringify(t));
+            } catch { /* quota / unavailable — silent */ }
+        });
 
         // Watch <html> for theme class changes; refresh cached colors
         // and nudge the simulation so the canvas repaints with the new
@@ -275,6 +360,12 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
         graphRef.current.graphData(visibleGraph);
     }, [visibleGraph]);
 
+    const handleFitAll = () => {
+        // 400ms tween, 40px padding around the bounding box of all
+        // currently-rendered nodes.
+        if (graphRef.current) graphRef.current.zoomToFit(400, 40);
+    };
+
     return (
         <div class="graph-view">
             <div class="graph-toolbar">
@@ -296,6 +387,14 @@ export function GraphView({ pages, searchQuery, onNavigate, onSearch }: GraphVie
                     <span class="graph-swatch graph-swatch-ref" aria-hidden="true"></span>
                     references
                 </label>
+                <button
+                    type="button"
+                    class="graph-fit"
+                    onClick={handleFitAll}
+                    title="Fit all visible nodes in view"
+                >
+                    fit all
+                </button>
             </div>
             <div class="graph-canvas" ref={containerRef} />
         </div>

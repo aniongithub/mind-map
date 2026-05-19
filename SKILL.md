@@ -8,6 +8,7 @@ tools:
   - create_page
   - update_page
   - delete_page
+  - move_page
   - list_pages
   - get_backlinks
   - register_sync
@@ -94,6 +95,14 @@ Replaces the full page content. Read the page first to preserve existing content
 delete_page(path: "drafts/old-idea")
 ```
 
+## Renaming / Moving Pages
+
+```
+move_page(from: "projects/old-name", to: "projects/new-name")
+```
+
+`move_page` is **atomic** — it renames the file on disk, updates the index, and rewrites the page's outgoing-link rows in one step. **Always use `move_page` instead of `create_page` + `delete_page`** to avoid leaving duplicate pages behind. Backlinks from other pages (other pages with `[[old-name]]` in their source) are intentionally not rewritten; if you want those updated, search and edit the source pages explicitly.
+
 ## Listing Pages
 
 ```
@@ -111,15 +120,47 @@ get_backlinks(path: "api/tokens")
 
 Use backlinks to discover related context and navigate the wiki.
 
+## Wiki Layout (Recommended)
+
+mind-map doesn't enforce a directory scheme, but **agents should follow this convention** so the wiki stays organizable and so [[git sync mappings|sync prefixes]] line up with meaningful boundaries:
+
+```
+<project-or-area>/<category>/<page>
+```
+
+Concretely:
+
+```
+projects/forgewright/architecture/dag.md
+projects/mind-map/concepts/wikilinks.md
+notes/reading/2026-05-design-patterns.md
+journal/2026-05-18.md
+decisions/2026-05-18-pick-sqlite-fts5.md
+```
+
+Top-level directories should be **projects** (named after the thing you're building) or **areas** (`notes`, `journal`, `decisions`, `people`, etc.). Inside each, group by category. This:
+
+- Keeps related pages close in the sidebar and graph view.
+- Makes `prefix:`-based sync mappings useful: a single mapping like `prefix: "projects/forgewright"` can sync that subtree to its own git repo.
+- Lets agents and humans navigate by intuition — "where would I put this?" usually has one obvious answer.
+
+When in doubt, prefer **deeper paths over wider ones**. A page at `projects/foo/decisions/auth.md` is almost always better than `foo-auth-decision.md` at the root.
+
 ## Best Practices
 
 - ✅ **Search first** — check what exists before creating new pages
 - ✅ **Use frontmatter** — add `title`, `type`, and `status` for structure
 - ✅ **Use wikilinks** — connect related pages with `[[target]]` syntax
-- ✅ **Organize by prefix** — group pages under meaningful directories
+- ✅ **Follow `<project>/<category>` layout** — see above
+- ✅ **`move_page`, not `create_page` + `delete_page`** — atomic, preserves the link graph
 - ✅ **Get context first** — call `get_wiki_context()` to orient yourself
 - ❌ **Don't create duplicates** — search before writing
 - ❌ **Don't use file extensions** — paths are without `.md`
+- ❌ **Don't dump pages at the root** — pick a project or area
+
+## Sync (read-only or read-write)
+
+`register_sync` ties a path prefix to a git remote. Sync is bidirectional by default but supports `direction: "pull"` (read-only) and `direction: "push"` (write-only) — useful when the wiki content is owned upstream (e.g. a project's GitHub wiki) and the local wiki is a working copy that should never push back. Respect existing sync mappings: don't reshape paths under a prefix that's syncing somewhere else without confirming with the user first.
 
 ## Page Format Example
 

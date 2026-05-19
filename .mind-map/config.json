@@ -1,0 +1,13 @@
+{
+  "sync": {
+    "enabled": true,
+    "interval": "30s",
+    "mappings": [
+      {
+        "prefix": "",
+        "remote": "https://github.com/aniongithub/mind-map.wiki.git",
+        "direction": "pull"
+      }
+    ]
+  }
+}

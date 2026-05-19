@@ -12,10 +12,35 @@ import (
 	"time"
 )
 
+// SyncDirection controls which side of the sync flow is active.
+//   - "" or "bidirectional" — pull from remote and push local changes (default)
+//   - "pull" — read-only: pull from remote into the wiki, never push
+//   - "push" — write-only: push wiki changes upstream, ignore remote changes
+type SyncDirection string
+
+const (
+	SyncBidirectional SyncDirection = "bidirectional"
+	SyncPull          SyncDirection = "pull"
+	SyncPush          SyncDirection = "push"
+)
+
+// Normalize returns the canonical direction value. Empty string becomes
+// SyncBidirectional. Unknown values also become SyncBidirectional (safe
+// default — better to over-sync than to silently no-op).
+func (d SyncDirection) Normalize() SyncDirection {
+	switch d {
+	case SyncPull, SyncPush, SyncBidirectional:
+		return d
+	default:
+		return SyncBidirectional
+	}
+}
+
 // SyncMapping maps a wiki path prefix to a git remote.
 type SyncMapping struct {
-	Prefix string `json:"prefix"`
-	Remote string `json:"remote"`
+	Prefix    string        `json:"prefix"`
+	Remote    string        `json:"remote"`
+	Direction SyncDirection `json:"direction,omitempty"`
 }
 
 // SyncConfig holds git sync settings.
