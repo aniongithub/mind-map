@@ -78,8 +78,15 @@ mkdir -p "${HOME}/.mind-map"
 
 # Stop existing service before replacing the binary
 if [ -f "${INSTALL_DIR}/mind-map" ]; then
-  sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null && \
-    echo "==> Stopped existing mind-map service" || true
+  # On macOS the service is a user LaunchAgent; sudo would look for the plist
+  # under /var/root instead of ~/Library/LaunchAgents, so don't use sudo.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    "${INSTALL_DIR}/mind-map" service stop 2>/dev/null && \
+      echo "==> Stopped existing mind-map service" || true
+  else
+    sudo "${INSTALL_DIR}/mind-map" service stop 2>/dev/null && \
+      echo "==> Stopped existing mind-map service" || true
+  fi
 fi
 
 echo "==> Downloading ${TARBALL_NAME}..."

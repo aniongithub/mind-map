@@ -91,6 +91,7 @@ func newServiceConfig(addr, dir, webui string, idleTimeout time.Duration) *servi
 	if runtime.GOOS == "darwin" {
 		cfg.Option = service.KeyValue{
 			"UserService": true,
+			"RunAtLoad":   true,
 		}
 	} else if runtime.GOOS == "linux" {
 		cfg.UserName = os.Getenv("SUDO_USER")
@@ -170,8 +171,12 @@ var serviceStartCmd = &cobra.Command{
 			return fmt.Errorf("start service: %w", err)
 		}
 		fmt.Println("Service started.")
-		fmt.Printf("  Web UI:       http://%s\n", addr)
-		fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
+		// Only print the address if explicitly provided; otherwise the plist
+		// may contain a different addr than the flag default.
+		if cmd.Flags().Changed("addr") {
+			fmt.Printf("  Web UI:       http://%s\n", addr)
+			fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
+		}
 		return nil
 	},
 }
