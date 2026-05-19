@@ -56,9 +56,10 @@ type Manager struct {
 
 // syncTarget manages a single shadow clone for one remote.
 type syncTarget struct {
-	remote   string
-	cloneDir string
-	prefixes []string // wiki prefixes that map to this remote
+	remote    string
+	cloneDir  string
+	prefixes  []string // wiki prefixes that map to this remote
+	direction config.SyncDirection
 
 	mu        sync.Mutex
 	lastSync  time.Time
@@ -179,34 +180,59 @@ func (m *Manager) rebuildTargets() {
 
 // rebuildTargetsLocked rebuilds targets. Caller must hold m.mu.
 func (m *Manager) rebuildTargetsLocked() {
-	// Build remote -> prefixes map
-	remotePrefixes := make(map[string][]string)
+	// Build remote -> (prefixes, direction) map. Default field is treated
+	// as a bidirectional mapping at the empty prefix.
+	type remoteInfo struct {
+		prefixes  []string
+		direction config.SyncDirection
+	}
+	remotes := make(map[string]*remoteInfo)
+	add := func(remote, prefix string, dir config.SyncDirection) {
+		if remote == "" {
+			return
+		}
+		ri, ok := remotes[remote]
+		if !ok {
+			ri = &remoteInfo{direction: dir}
+			remotes[remote] = ri
+		}
+		ri.prefixes = append(ri.prefixes, prefix)
+		// First mapping wins for direction. If a later mapping for the
+		// same remote disagrees, log a warning — there's no sane way to
+		// run a single shadow clone with two opposing directions.
+		if ri.direction != dir {
+			slog.Warn("conflicting sync directions for remote, using first",
+				slog.String("remote", remote),
+				slog.String("kept", string(ri.direction)),
+				slog.String("ignored", string(dir)))
+		}
+	}
 	if m.cfg.Sync.Default != "" {
-		remotePrefixes[m.cfg.Sync.Default] = append(remotePrefixes[m.cfg.Sync.Default], "")
+		add(m.cfg.Sync.Default, "", config.SyncBidirectional)
 	}
 	for _, mapping := range m.cfg.Sync.Mappings {
-		if mapping.Remote != "" {
-			remotePrefixes[mapping.Remote] = append(remotePrefixes[mapping.Remote], mapping.Prefix)
-		}
+		add(mapping.Remote, mapping.Prefix, mapping.Direction.Normalize())
 	}
 
 	// Create or update targets
-	for remote, prefixes := range remotePrefixes {
+	for remote, ri := range remotes {
 		if t, exists := m.targets[remote]; exists {
-			t.prefixes = prefixes
+			t.prefixes = ri.prefixes
+			t.direction = ri.direction
 		} else {
 			dirName := sanitizeDirName(remote)
 			m.targets[remote] = &syncTarget{
-				remote:   remote,
-				cloneDir: filepath.Join(m.syncDir, dirName),
-				prefixes: prefixes,
+				remote:    remote,
+				cloneDir:  filepath.Join(m.syncDir, dirName),
+				prefixes:  ri.prefixes,
+				direction: ri.direction,
 			}
 		}
 	}
 
 	// Remove targets no longer in config
 	for remote := range m.targets {
-		if _, exists := remotePrefixes[remote]; !exists {
+		if _, exists := remotes[remote]; !exists {
 			delete(m.targets, remote)
 		}
 	}
@@ -229,39 +255,70 @@ func (m *Manager) syncAll(ctx context.Context) {
 	}
 }
 
-// syncTarget syncs a single remote: pull -> copy in -> reindex -> copy out -> commit -> push.
+// syncTarget syncs a single remote. Behavior depends on direction:
+//   - bidirectional (default): pull → copy in → reindex → copy out → commit → push
+//   - pull: pull → copy in → reindex (never copies wiki → clone, never pushes)
+//   - push: copy out → commit → push (never copies clone → wiki, never reindexes
+//     from remote changes; we still fetch so the merge below is meaningful)
 func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	t.mu.Lock()
 	t.lastError = ""
 	t.mu.Unlock()
 
-	// Ensure clone exists
+	direction := t.direction
+	if direction == "" {
+		direction = config.SyncBidirectional
+	}
+	wantPull := direction == config.SyncBidirectional || direction == config.SyncPull
+	wantPush := direction == config.SyncBidirectional || direction == config.SyncPush
+
+	// Ensure clone exists. We always need a working clone — even push-only
+	// targets need somewhere to commit before pushing.
 	if err := m.ensureClone(ctx, t); err != nil {
 		t.setError(fmt.Sprintf("clone: %v", err))
 		return
 	}
 
-	// Pull
+	// Fetch + (optional) merge. Both pull-only and push-only need this:
+	// pull-only is obvious; push-only needs a base so `git push` isn't
+	// rejected as a non-fast-forward against a remote that already has
+	// commits. The difference between modes is only whether we copy the
+	// merged remote state INTO the wiki dir and reindex.
 	if err := gitCmd(ctx, t.cloneDir, "fetch", "origin"); err != nil {
 		t.setError(fmt.Sprintf("fetch: %v", err))
 		return
 	}
-
-	// Check if remote branch exists
 	if err := gitCmd(ctx, t.cloneDir, "rev-parse", "--verify", "origin/main"); err == nil {
 		if err := gitCmd(ctx, t.cloneDir, "merge", "origin/main", "--allow-unrelated-histories", "--no-edit"); err != nil {
 			slog.Warn("merge conflict", slog.String("remote", t.remote), slog.Any("error", err))
 		}
+	} else if err := gitCmd(ctx, t.cloneDir, "rev-parse", "--verify", "origin/master"); err == nil {
+		// GitHub wikis default to the 'master' branch — try it as a
+		// fallback when 'main' doesn't exist.
+		if err := gitCmd(ctx, t.cloneDir, "merge", "origin/master", "--allow-unrelated-histories", "--no-edit"); err != nil {
+			slog.Warn("merge conflict", slog.String("remote", t.remote), slog.Any("error", err))
+		}
 	}
 
-	// Copy from clone to wiki (pull direction)
-	m.copyToWiki(t)
+	if wantPull {
+		// Copy from clone to wiki (pull direction)
+		m.copyToWiki(t)
 
-	// Reindex to pick up pulled changes
-	if m.reindexer != nil {
-		if err := m.reindexer.Reindex(ctx); err != nil {
-			slog.Warn("reindex after pull failed", slog.Any("error", err))
+		// Reindex to pick up pulled changes
+		if m.reindexer != nil {
+			if err := m.reindexer.Reindex(ctx); err != nil {
+				slog.Warn("reindex after pull failed", slog.Any("error", err))
+			}
 		}
+	}
+
+	if !wantPush {
+		t.mu.Lock()
+		t.lastSync = time.Now()
+		t.lastError = ""
+		t.mu.Unlock()
+		slog.Debug("sync target complete (pull-only)", slog.String("remote", t.remote))
+		return
 	}
 
 	// Copy from wiki to clone (push direction)

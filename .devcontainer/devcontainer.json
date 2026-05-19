@@ -42,5 +42,13 @@
       "label": "mind-map Server (devcontainer)",
       "onAutoForward": "ignore"
     }
-  }
+  },
+  "mounts": [
+    // Bind-mount the workspace's .mind-map/ as the vscode user's home
+    // .mind-map/ so the committed config.json (with the pull-only sync
+    // mapping to the GitHub wiki) is what mind-map serve reads. The
+    // wiki dir itself (.mind-map/wiki/) is gitignored and populated by
+    // sync on first launch.
+    "source=${localWorkspaceFolder}/.mind-map,target=/home/vscode/.mind-map,type=bind,consistency=cached"
+  ]
 }

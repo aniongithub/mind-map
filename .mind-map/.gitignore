@@ -1,0 +1,6 @@
+# Only the sync config is checked in; everything else is generated at
+# runtime (wiki content pulled by sync, SQLite index, shadow clones,
+# logs) and stays out of the repo.
+*
+!.gitignore
+!config.json

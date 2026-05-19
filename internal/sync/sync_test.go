@@ -260,3 +260,95 @@ func TestStartAndStop(t *testing.T) {
 		t.Error("status should show enabled")
 	}
 }
+
+func TestPullOnlyDoesNotPushLocalChanges(t *testing.T) {
+if _, err := exec.LookPath("git"); err != nil {
+t.Skip("git not found")
+}
+
+remotePath := setupBareRemote(t)
+seedRemote(t, remotePath)
+
+wikiDir := t.TempDir()
+cfg := config.DefaultConfig()
+cfg.Sync.Enabled = true
+cfg.Sync.Interval = "5s"
+cfg.Sync.Mappings = []config.SyncMapping{
+{Prefix: "", Remote: remotePath, Direction: config.SyncPull},
+}
+cfgPath := filepath.Join(t.TempDir(), "config.json")
+config.Save(cfgPath, cfg)
+
+mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+if err := mgr.Start(context.Background()); err != nil {
+t.Fatalf("Start: %v", err)
+}
+defer mgr.Stop()
+
+// Pull happened: seeded index.md should be on disk.
+if _, err := os.Stat(filepath.Join(wikiDir, "index.md")); err != nil {
+t.Fatalf("pull did not populate wiki: %v", err)
+}
+
+// Drop a local-only page and run another sync cycle.
+if err := os.WriteFile(filepath.Join(wikiDir, "local-only.md"), []byte("# Local\n"), 0o644); err != nil {
+t.Fatalf("write local page: %v", err)
+}
+mgr.syncAll(context.Background())
+
+// The local page must NOT have been pushed to the remote.
+cloneTarget := filepath.Join(t.TempDir(), "verify")
+cmd := exec.Command("git", "clone", remotePath, cloneTarget)
+if out, err := cmd.CombinedOutput(); err != nil {
+t.Fatalf("clone for verify: %s: %v", out, err)
+}
+if _, err := os.Stat(filepath.Join(cloneTarget, "local-only.md")); !os.IsNotExist(err) {
+t.Errorf("pull-only mapping pushed local-only.md upstream (err=%v)", err)
+}
+}
+
+func TestPushOnlyDoesNotPullRemoteChanges(t *testing.T) {
+if _, err := exec.LookPath("git"); err != nil {
+t.Skip("git not found")
+}
+
+remotePath := setupBareRemote(t)
+seedRemote(t, remotePath) // creates remote index.md with "Welcome"
+
+wikiDir := t.TempDir()
+cfg := config.DefaultConfig()
+cfg.Sync.Enabled = true
+cfg.Sync.Interval = "5s"
+cfg.Sync.Mappings = []config.SyncMapping{
+{Prefix: "", Remote: remotePath, Direction: config.SyncPush},
+}
+cfgPath := filepath.Join(t.TempDir(), "config.json")
+config.Save(cfgPath, cfg)
+
+mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+if err := mgr.Start(context.Background()); err != nil {
+t.Fatalf("Start: %v", err)
+}
+defer mgr.Stop()
+
+// Remote had index.md; in push-only mode the wiki should NOT have
+// gained it via pull.
+if _, err := os.Stat(filepath.Join(wikiDir, "index.md")); !os.IsNotExist(err) {
+t.Errorf("push-only mapping pulled index.md (err=%v)", err)
+}
+
+// Drop a local page and sync; it should be pushed.
+if err := os.WriteFile(filepath.Join(wikiDir, "outbound.md"), []byte("# Out\n"), 0o644); err != nil {
+t.Fatalf("write outbound page: %v", err)
+}
+mgr.syncAll(context.Background())
+
+cloneTarget := filepath.Join(t.TempDir(), "verify")
+cmd := exec.Command("git", "clone", remotePath, cloneTarget)
+if out, err := cmd.CombinedOutput(); err != nil {
+t.Fatalf("clone for verify: %s: %v", out, err)
+}
+if _, err := os.Stat(filepath.Join(cloneTarget, "outbound.md")); err != nil {
+t.Errorf("push-only did not push outbound.md: %v", err)
+}
+}
