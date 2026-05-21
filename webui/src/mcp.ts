@@ -39,13 +39,13 @@ class APIClient {
         const url = prefix ? `/api/pages?prefix=${encodeURIComponent(prefix)}` : '/api/pages';
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return (await res.json()) || [];
     }
 
     async searchPages(query: string, limit = 20): Promise<SearchResult[]> {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return (await res.json()) || [];
     }
 
     async createPage(path: string, content: string): Promise<void> {
@@ -74,7 +74,7 @@ class APIClient {
     async getBacklinks(path: string): Promise<string[]> {
         const res = await fetch(`/api/backlinks/${path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return (await res.json()) || [];
     }
 
     async allLinks(): Promise<Link[]> {
