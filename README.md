@@ -93,7 +93,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | `get_page` | Read a page with parsed frontmatter, body, outgoing links, and backlinks |
 | `create_page` | Create a new page (markdown with optional YAML frontmatter) |
 | `update_page` | Update an existing page's content |
-| `move_page` | Rename or relocate a page atomically (use instead of `create_page` + `delete_page`) |
+| `move_page` | Rename or relocate a page atomically (use instead of `create_page` + `delete_page`). Refuses to overwrite an existing destination unless `overwrite: true` is passed — agents should ask the user first. |
 | `delete_page` | Delete a page from the wiki and search index |
 | `list_pages` | List pages, optionally filtered by path prefix |
 | `get_backlinks` | Get all pages that link to a given page |

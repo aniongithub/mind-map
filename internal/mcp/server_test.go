@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aniongithub/mind-map/internal/wiki"
@@ -292,5 +293,89 @@ func TestMovePage(t *testing.T) {
 	})
 	if err == nil && !result.IsError {
 		t.Error("expected error fetching old path after move, got success")
+	}
+}
+
+func TestMovePageDestinationExistsIsRecoverable(t *testing.T) {
+	session := setupTestServer(t)
+	ctx := context.Background()
+
+	// "index" already exists in the seed data; this move should fail
+	// with a message that tells the agent overwrite=true is the way
+	// forward (rather than a generic error that invites a retry loop).
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "move_page",
+		Arguments: map[string]any{"from": "Go", "to": "index"},
+	})
+	if err == nil && !result.IsError {
+		t.Fatal("expected error moving onto existing destination, got success")
+	}
+	var text string
+	if err != nil {
+		text = err.Error()
+	} else if len(result.Content) > 0 {
+		if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+			text = tc.Text
+		}
+	}
+	if !strings.Contains(text, "destination already exists") {
+		t.Errorf("error message %q does not mention 'destination already exists'", text)
+	}
+	if !strings.Contains(text, "overwrite=true") {
+		t.Errorf("error message %q does not mention overwrite=true recovery path", text)
+	}
+
+	// Source must still be there (the failed move must not have moved anything).
+	srcText := callTool(t, session, "get_page", map[string]any{"path": "Go"})
+	var srcPage wiki.Page
+	if err := json.Unmarshal([]byte(srcText), &srcPage); err != nil {
+		t.Fatalf("unmarshal source page: %v", err)
+	}
+	if srcPage.Path != "Go" {
+		t.Errorf("source page path = %q, want %q (failed move must not move anything)", srcPage.Path, "Go")
+	}
+}
+
+func TestMovePageOverwriteSucceeds(t *testing.T) {
+	session := setupTestServer(t)
+
+	// First confirm the no-overwrite path is rejected (mirrors what the
+	// agent would see before asking the user).
+	ctx := context.Background()
+	result, _ := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "move_page",
+		Arguments: map[string]any{"from": "Go", "to": "index"},
+	})
+	if result == nil || !result.IsError {
+		t.Fatal("expected move without overwrite to fail; agent must see this signal before retrying")
+	}
+
+	// Retry with overwrite=true (the user-confirmed path).
+	text := callTool(t, session, "move_page", map[string]any{
+		"from":      "Go",
+		"to":        "index",
+		"overwrite": true,
+	})
+	if !strings.Contains(text, "Moved page") || !strings.Contains(text, "overwrote existing destination") {
+		t.Errorf("overwrite move response = %q; expected to mention overwrite", text)
+	}
+
+	// "index" now holds the content that used to be at "Go".
+	pageText := callTool(t, session, "get_page", map[string]any{"path": "index"})
+	var page wiki.Page
+	if err := json.Unmarshal([]byte(pageText), &page); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(page.Body, "A programming language") {
+		t.Errorf("destination body does not contain source content: %q", page.Body)
+	}
+
+	// "Go" must no longer exist.
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "get_page",
+		Arguments: map[string]any{"path": "Go"},
+	})
+	if err == nil && !result.IsError {
+		t.Error("expected error fetching source after overwrite move, got success")
 	}
 }

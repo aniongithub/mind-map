@@ -103,6 +103,14 @@ move_page(from: "projects/old-name", to: "projects/new-name")
 
 `move_page` is **atomic** — it renames the file on disk, updates the index, and rewrites the page's outgoing-link rows in one step. **Always use `move_page` instead of `create_page` + `delete_page`** to avoid leaving duplicate pages behind. Backlinks from other pages (other pages with `[[old-name]]` in their source) are intentionally not rewritten; if you want those updated, search and edit the source pages explicitly.
 
+If the destination already exists, `move_page` fails with a message containing `destination already exists`. **Ask the user whether to overwrite** — the destination's content will be lost — and only then retry with `overwrite: true`:
+
+```
+move_page(from: "projects/old-name", to: "projects/new-name", overwrite: true)
+```
+
+Never set `overwrite: true` without explicit user confirmation: it is destructive.
+
 ## Listing Pages
 
 ```
