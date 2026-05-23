@@ -5,6 +5,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -277,11 +278,29 @@ func (m *Manager) syncAll(ctx context.Context) {
 	}
 }
 
-// syncTarget syncs a single remote. Behavior depends on direction:
-//   - bidirectional (default): pull → copy in → reindex → copy out → commit → push
-//   - pull: pull → copy in → reindex (never copies wiki → clone, never pushes)
-//   - push: copy out → commit → push (never copies clone → wiki, never reindexes
-//     from remote changes; we still fetch so the merge below is meaningful)
+// syncTarget syncs a single remote.
+//
+// The flow is "commit-then-merge", which is the only ordering that
+// preserves local-only changes against a concurrent remote:
+//
+//  1. (if wantPush) stage local wiki state into the clone and commit it,
+//     so local edits are part of HEAD before we merge anything in.
+//  2. Fetch origin and merge. Git's 3-way merge resolves overlapping
+//     changes; if it conflicts, conflict markers stay in the clone and
+//     surface to the user via copyToWiki + the Status conflicts list.
+//  3. (if wantPull) mirror the merged clone state back to the wiki dir
+//     and reindex. Files whose content is unchanged are skipped to
+//     avoid bumping mtime and triggering pointless reindex churn.
+//  4. (if wantPush) push HEAD to origin.
+//
+// Doing it in the other order (merge before staging local) lets a
+// freshly-pulled remote file overwrite a local edit that landed between
+// sync ticks — see TestLocalUpdateSurvivesBidirectionalSync.
+//
+// Direction modes:
+//   - bidirectional (default): all four phases
+//   - pull: skip phases 1 and 4; never copies wiki → clone
+//   - push: skip phase 3; never copies clone → wiki, never reindexes
 func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	t.mu.Lock()
 	t.lastError = ""
@@ -294,18 +313,37 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	wantPull := direction == config.SyncBidirectional || direction == config.SyncPull
 	wantPush := direction == config.SyncBidirectional || direction == config.SyncPush
 
-	// Ensure clone exists. We always need a working clone — even push-only
-	// targets need somewhere to commit before pushing.
+	// Ensure clone exists. Even push-only needs a working clone.
 	if err := m.ensureClone(ctx, t); err != nil {
 		t.setError(fmt.Sprintf("clone: %v", err))
 		return
 	}
 
-	// Fetch + (optional) merge. Both pull-only and push-only need this:
-	// pull-only is obvious; push-only needs a base so `git push` isn't
-	// rejected as a non-fast-forward against a remote that already has
-	// commits. The difference between modes is only whether we copy the
-	// merged remote state INTO the wiki dir and reindex.
+	// Phase 1: stage local wiki state in the clone and commit it before
+	// pulling. This is what prevents local writes from being clobbered by
+	// the merge in phase 2.
+	if wantPush {
+		m.copyFromWiki(t)
+		ensureGitignore(t.cloneDir)
+		if err := gitCmd(ctx, t.cloneDir, "add", "-A"); err != nil {
+			t.setError(fmt.Sprintf("add: %v", err))
+			return
+		}
+		// Only commit if there are staged changes.
+		if err := gitCmd(ctx, t.cloneDir, "diff", "--cached", "--quiet"); err != nil {
+			hostname, _ := os.Hostname()
+			msg := fmt.Sprintf("sync from %s at %s", hostname, time.Now().UTC().Format(time.RFC3339))
+			if err := gitCmd(ctx, t.cloneDir, "commit", "-m", msg); err != nil {
+				t.setError(fmt.Sprintf("commit: %v", err))
+				return
+			}
+		}
+	}
+
+	// Phase 2: fetch + merge. The merge is what reconciles local commits
+	// (from phase 1) with new remote work. Pull-only also needs the merge
+	// to advance HEAD; push-only needs it as a fast-forward base so the
+	// later push isn't rejected.
 	if err := gitCmd(ctx, t.cloneDir, "fetch", "origin"); err != nil {
 		t.setError(fmt.Sprintf("fetch: %v", err))
 		return
@@ -322,11 +360,12 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 		}
 	}
 
-	if wantPull {
-		// Copy from clone to wiki (pull direction)
-		m.copyToWiki(t)
+	// Conflicts (if any) are computed against the now-merged tree.
+	conflicts := checkConflicts(ctx, t.cloneDir)
 
-		// Reindex to pick up pulled changes
+	// Phase 3: mirror merged clone state back to wiki and reindex.
+	if wantPull {
+		m.copyToWiki(t)
 		if m.reindexer != nil {
 			if err := m.reindexer.Reindex(ctx); err != nil {
 				slog.Warn("reindex after pull failed", slog.Any("error", err))
@@ -334,43 +373,15 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 		}
 	}
 
-	if !wantPush {
-		t.mu.Lock()
-		t.lastSync = time.Now()
-		t.lastError = ""
-		t.mu.Unlock()
-		slog.Debug("sync target complete (pull-only)", slog.String("remote", t.remote))
-		return
-	}
-
-	// Copy from wiki to clone (push direction)
-	m.copyFromWiki(t)
-
-	// Check for conflicts
-	conflicts := checkConflicts(ctx, t.cloneDir)
-
-	// Commit and push
-	ensureGitignore(t.cloneDir)
-	if err := gitCmd(ctx, t.cloneDir, "add", "-A"); err != nil {
-		t.setError(fmt.Sprintf("add: %v", err))
-		return
-	}
-
-	// Only commit if there are staged changes
-	if err := gitCmd(ctx, t.cloneDir, "diff", "--cached", "--quiet"); err != nil {
-		hostname, _ := os.Hostname()
-		msg := fmt.Sprintf("sync from %s at %s", hostname, time.Now().UTC().Format(time.RFC3339))
-		if err := gitCmd(ctx, t.cloneDir, "commit", "-m", msg); err != nil {
-			t.setError(fmt.Sprintf("commit: %v", err))
-			return
-		}
-	}
-
-	// Push (only if we have commits)
-	if err := gitCmd(ctx, t.cloneDir, "rev-parse", "HEAD"); err == nil {
-		if err := gitCmd(ctx, t.cloneDir, "push", "-u", "origin", "main"); err != nil {
-			t.setError(fmt.Sprintf("push: %v", err))
-			return
+	// Phase 4: push.
+	if wantPush {
+		// Only push if we have any commits at all (a fresh clone with no
+		// initial pull and no local content will have none).
+		if err := gitCmd(ctx, t.cloneDir, "rev-parse", "HEAD"); err == nil {
+			if err := gitCmd(ctx, t.cloneDir, "push", "-u", "origin", "main"); err != nil {
+				t.setError(fmt.Sprintf("push: %v", err))
+				return
+			}
 		}
 	}
 
@@ -414,10 +425,18 @@ func (m *Manager) ensureClone(ctx context.Context, t *syncTarget) error {
 }
 
 // copyToWiki copies files from the shadow clone to the wiki directory.
+// Only files whose content differs from the destination are written, so
+// unchanged pages don't get their mtime bumped on every sync — that
+// matters because the wiki indexer uses mtime to decide what to re-parse.
+//
+// The clone is always rooted at the wiki-side prefix level: a target
+// with prefix "projects/alpha" maps the root of the shadow clone into
+// wikiRoot/projects/alpha. An empty prefix mirrors the whole clone
+// to the wiki root. This matches copyFromWiki (the reverse direction).
 func (m *Manager) copyToWiki(t *syncTarget) {
 	for _, prefix := range t.prefixes {
-		wikiDir := filepath.Join(m.wikiRoot, prefix)
-		os.MkdirAll(wikiDir, 0o755)
+		dstRoot := filepath.Join(m.wikiRoot, prefix)
+		os.MkdirAll(dstRoot, 0o755)
 
 		filepath.WalkDir(t.cloneDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -434,12 +453,15 @@ func (m *Manager) copyToWiki(t *syncTarget) {
 				return nil
 			}
 			rel, _ := filepath.Rel(t.cloneDir, path)
-			dst := filepath.Join(wikiDir, rel)
-			os.MkdirAll(filepath.Dir(dst), 0o755)
+			dst := filepath.Join(dstRoot, rel)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
 			}
+			if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
+				return nil
+			}
+			os.MkdirAll(filepath.Dir(dst), 0o755)
 			os.WriteFile(dst, data, 0o644)
 			return nil
 		})
@@ -447,14 +469,18 @@ func (m *Manager) copyToWiki(t *syncTarget) {
 }
 
 // copyFromWiki copies files from the wiki directory to the shadow clone.
+// Mirrors copyToWiki's prefix semantics: wikiRoot/prefix → cloneDir.
+// Skips writes for identical files so git doesn't observe spurious
+// "modified" entries on otherwise-clean trees, and removes clone-side
+// files that no longer exist in the wiki so deletions propagate.
 func (m *Manager) copyFromWiki(t *syncTarget) {
 	for _, prefix := range t.prefixes {
-		wikiDir := filepath.Join(m.wikiRoot, prefix)
-		if _, err := os.Stat(wikiDir); err != nil {
+		srcRoot := filepath.Join(m.wikiRoot, prefix)
+		if _, err := os.Stat(srcRoot); err != nil {
 			continue
 		}
 
-		filepath.WalkDir(wikiDir, func(path string, d os.DirEntry, err error) error {
+		filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -468,14 +494,41 @@ func (m *Manager) copyFromWiki(t *syncTarget) {
 			if d.IsDir() || !strings.HasSuffix(name, ".md") {
 				return nil
 			}
-			rel, _ := filepath.Rel(wikiDir, path)
+			rel, _ := filepath.Rel(srcRoot, path)
 			dst := filepath.Join(t.cloneDir, rel)
-			os.MkdirAll(filepath.Dir(dst), 0o755)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
 			}
+			if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
+				return nil
+			}
+			os.MkdirAll(filepath.Dir(dst), 0o755)
 			os.WriteFile(dst, data, 0o644)
+			return nil
+		})
+
+		// Mirror deletes: any .md in the clone that no longer exists in
+		// the wiki must be removed so `git add -A` notices the deletion.
+		filepath.WalkDir(t.cloneDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			name := d.Name()
+			if strings.HasPrefix(name, ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+				return nil
+			}
+			rel, _ := filepath.Rel(t.cloneDir, path)
+			src := filepath.Join(srcRoot, rel)
+			if _, err := os.Stat(src); os.IsNotExist(err) {
+				os.Remove(path)
+			}
 			return nil
 		})
 	}

@@ -261,6 +261,122 @@ func TestStartAndStop(t *testing.T) {
 	}
 }
 
+// TestLocalUpdateSurvivesBidirectionalSync exercises the bug where a local
+// write that lands between two sync ticks is clobbered by the next pull
+// because copyToWiki unconditionally overwrites every wiki file with its
+// shadow-clone copy *before* copyFromWiki gets a chance to commit the
+// local change. The local edit must (a) still be on disk after a sync
+// cycle and (b) make it to the remote.
+func TestLocalUpdateSurvivesBidirectionalSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath) // creates index.md with "Welcome"
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h" // don't let the background ticker interfere
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	// After initial sync the seeded page is on disk.
+	indexPath := filepath.Join(wikiDir, "index.md")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("initial sync did not populate wiki: %v", err)
+	}
+
+	// Simulate the user calling update_page: rewrite the local file
+	// with new content. This is exactly what wiki.UpdatePage does.
+	newContent := []byte("# Home\n\nUser made a local edit.\n")
+	if err := os.WriteFile(indexPath, newContent, 0o644); err != nil {
+		t.Fatalf("local update: %v", err)
+	}
+
+	// Next sync tick. The local edit must survive and propagate.
+	mgr.syncAll(context.Background())
+
+	got, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read after sync: %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Errorf("local edit was clobbered by sync:\n  got:  %q\n  want: %q", got, newContent)
+	}
+
+	// And the remote must have received the edit.
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	remoteContent, err := os.ReadFile(filepath.Join(cloneTarget, "index.md"))
+	if err != nil {
+		t.Fatalf("read remote index.md: %v", err)
+	}
+	if string(remoteContent) != string(newContent) {
+		t.Errorf("remote did not receive local edit:\n  got:  %q\n  want: %q", remoteContent, newContent)
+	}
+}
+
+// TestLocalDeleteSurvivesBidirectionalSync covers the matching delete_page
+// scenario: a locally-deleted file must stay deleted and the deletion must
+// propagate to the remote, rather than being undone by copyToWiki.
+func TestLocalDeleteSurvivesBidirectionalSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath)
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h"
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	indexPath := filepath.Join(wikiDir, "index.md")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("initial sync did not populate wiki: %v", err)
+	}
+
+	// Delete locally (what wiki.DeletePage does).
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatalf("local delete: %v", err)
+	}
+
+	mgr.syncAll(context.Background())
+
+	if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+		t.Errorf("local deletion was undone by sync (err=%v)", err)
+	}
+
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(cloneTarget, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("remote did not receive deletion (err=%v)", err)
+	}
+}
+
 func TestPullOnlyDoesNotPushLocalChanges(t *testing.T) {
 if _, err := exec.LookPath("git"); err != nil {
 t.Skip("git not found")
