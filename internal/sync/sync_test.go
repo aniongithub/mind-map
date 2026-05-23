@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/wiki"
 )
 
 // mockReindexer records reindex calls.
@@ -374,6 +375,102 @@ func TestLocalDeleteSurvivesBidirectionalSync(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cloneTarget, "index.md")); !os.IsNotExist(err) {
 		t.Errorf("remote did not receive deletion (err=%v)", err)
+	}
+}
+
+// TestWikiUpdateAndDeleteThroughSync drives the same race as the two
+// previous tests, but through the public wiki.Wiki API (UpdatePage,
+// DeletePage) rather than raw os.WriteFile. This is closer to what the
+// user actually reported: agent calls update_page / delete_page, the
+// API returns success, but the next sync tick clobbers the change.
+//
+// The wiki here uses the same reindexer the manager calls, so the
+// indexer state and on-disk state stay in sync the way they do in
+// production.
+func TestWikiUpdateAndDeleteThroughSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath)
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h"
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	// First sync without a wiki to populate the wiki dir from the
+	// seeded remote. Then open the wiki on the populated dir so its
+	// index matches the on-disk state.
+	bootstrap := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := bootstrap.Start(context.Background()); err != nil {
+		t.Fatalf("bootstrap Start: %v", err)
+	}
+	bootstrap.Stop()
+
+	w, err := wiki.Open(wikiDir)
+	if err != nil {
+		t.Fatalf("wiki.Open: %v", err)
+	}
+	defer w.Close()
+
+	// Real reindexer wired to the wiki.
+	mgr := NewManager(wikiDir, cfgPath, cfg, w)
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	ctx := context.Background()
+
+	// --- Update via the wiki API ---
+	newBody := "# Home\n\nUpdated via the wiki API.\n"
+	if err := w.UpdatePage(ctx, "index", newBody); err != nil {
+		t.Fatalf("UpdatePage: %v", err)
+	}
+	mgr.syncAll(ctx)
+
+	got, err := os.ReadFile(filepath.Join(wikiDir, "index.md"))
+	if err != nil {
+		t.Fatalf("read index.md: %v", err)
+	}
+	if string(got) != newBody {
+		t.Errorf("UpdatePage was clobbered by sync:\n  got:  %q\n  want: %q", got, newBody)
+	}
+
+	// The wiki's own index must still reflect the new body too.
+	p, err := w.GetPage(ctx, "index")
+	if err != nil {
+		t.Fatalf("GetPage: %v", err)
+	}
+	if !strings.Contains(p.Body, "Updated via the wiki API") {
+		t.Errorf("index page body does not contain new content: %q", p.Body)
+	}
+
+	// --- Delete via the wiki API ---
+	if err := w.DeletePage(ctx, "index"); err != nil {
+		t.Fatalf("DeletePage: %v", err)
+	}
+	mgr.syncAll(ctx)
+
+	if _, err := os.Stat(filepath.Join(wikiDir, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("DeletePage was undone by sync (err=%v)", err)
+	}
+	if _, err := w.GetPage(ctx, "index"); err == nil {
+		t.Error("wiki still indexes 'index' after delete+sync")
+	}
+
+	// Remote should reflect both operations: index.md is gone.
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(cloneTarget, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("remote still has index.md after wiki delete (err=%v)", err)
 	}
 }
 
