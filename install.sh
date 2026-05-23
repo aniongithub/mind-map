@@ -127,6 +127,7 @@ SKILL_DIRS=(
   "${HOME}/.copilot/skills/mind-map"
   "${HOME}/.claude/skills/mind-map"
   "${HOME}/.agents/skills/mind-map"
+  "${HOME}/.config/opencode/skills/mind-map"
 )
 
 echo ""
@@ -265,20 +266,65 @@ configure_mcp_client() {
 MCPEOF
     echo "  + ${client_name} -- created ${config_file}"
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -c "
-import json
-path = '${config_file}'
+    # Pass values via env vars to avoid shell-quoting the JSON literal into
+    # Python source code (which breaks on every embedded double-quote).
+    MM_CFG="$config_file" MM_ENTRY="$mcp_entry" MM_CLIENT="$client_name" \
+    python3 -c '
+import json, os
+path = os.environ["MM_CFG"]
+client = os.environ["MM_CLIENT"]
 with open(path) as f:
     data = json.load(f)
-servers = data.setdefault('mcpServers', {})
-entry = json.loads('${mcp_entry}')
-servers['mind-map'] = entry
-with open(path, 'w') as f:
+servers = data.setdefault("mcpServers", {})
+servers["mind-map"] = json.loads(os.environ["MM_ENTRY"])
+with open(path, "w") as f:
     json.dump(data, f, indent=2)
-print('  + ${client_name} -- updated ${config_file}')
-" 2>/dev/null || echo "  ! ${client_name} -- could not update ${config_file}"
+print(f"  + {client} -- updated {path}")
+' || echo "  ! ${client_name} -- could not update ${config_file}"
   else
     echo "  ! ${client_name} -- exists but python3 not available to merge"
+  fi
+}
+
+# OpenCode uses a different MCP config shape than Claude/Copilot/VS Code/Cursor:
+#   - Top-level key is "mcp" (not "mcpServers")
+#   - command is an array (not a string + separate args)
+#   - "enabled": true is expected on the entry
+#   - JSONC (JSON with comments) is supported but we always emit plain JSON
+# See https://opencode.ai/docs/mcp-servers
+configure_opencode() {
+  local config_file="$1"
+
+  # OpenCode entry, written with command as a JSON array.
+  local mcp_entry
+  mcp_entry="{\"type\": \"local\", \"command\": [\"${INSTALL_DIR}/mind-map\"], \"enabled\": true}"
+
+  if [ ! -f "$config_file" ]; then
+    mkdir -p "$(dirname "$config_file")"
+    cat > "$config_file" << OPENCODEEOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mind-map": ${mcp_entry}
+  }
+}
+OPENCODEEOF
+    echo "  + OpenCode -- created ${config_file}"
+  elif command -v python3 >/dev/null 2>&1; then
+    MM_CFG="$config_file" MM_ENTRY="$mcp_entry" \
+    python3 -c '
+import json, os
+path = os.environ["MM_CFG"]
+with open(path) as f:
+    data = json.load(f)
+servers = data.setdefault("mcp", {})
+servers["mind-map"] = json.loads(os.environ["MM_ENTRY"])
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+print(f"  + OpenCode -- updated {path}")
+' || echo "  ! OpenCode -- could not update ${config_file}"
+  else
+    echo "  ! OpenCode -- exists but python3 not available to merge"
   fi
 }
 
@@ -308,6 +354,22 @@ fi
 # Claude Code
 configure_mcp_client "${HOME}/.claude.json" "Claude Code"
 
+# OpenCode (https://opencode.ai). The studio reads opencode.json first, then
+# opencode.jsonc. If neither exists but the binary is on PATH or the config
+# directory has been created, we write the canonical .json so future runs
+# pick it up.
+OPENCODE_CFG=""
+if [ -f "${HOME}/.config/opencode/opencode.json" ]; then
+  OPENCODE_CFG="${HOME}/.config/opencode/opencode.json"
+elif [ -f "${HOME}/.config/opencode/opencode.jsonc" ]; then
+  OPENCODE_CFG="${HOME}/.config/opencode/opencode.jsonc"
+elif [ -d "${HOME}/.config/opencode" ] || command -v opencode >/dev/null 2>&1; then
+  OPENCODE_CFG="${HOME}/.config/opencode/opencode.json"
+fi
+if [ -n "$OPENCODE_CFG" ]; then
+  configure_opencode "$OPENCODE_CFG"
+fi
+
 echo ""
 if [ "$INSTALL_SERVICE" = "y" ] || [ "$INSTALL_SERVICE" = "Y" ]; then
   echo "Done! mind-map is running as a service."
@@ -321,5 +383,5 @@ echo "To uninstall mind-map completely:"
 echo "  sudo mind-map service uninstall   # remove service (if installed)"
 echo "  rm ${INSTALL_DIR}/mind-map        # remove binary"
 echo "  rm -rf ~/.mind-map                # remove wiki data"
-echo "  rm -rf ~/.copilot/skills/mind-map ~/.claude/skills/mind-map ~/.agents/skills/mind-map"
+echo "  rm -rf ~/.copilot/skills/mind-map ~/.claude/skills/mind-map ~/.agents/skills/mind-map ~/.config/opencode/skills/mind-map"
 echo ""
