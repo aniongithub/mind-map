@@ -52,12 +52,36 @@ type Deps struct {
 // Server holds the live handler state, including the sync supervisor.
 // It is not exported beyond New(); the only public surface is the
 // http.Handler returned from New.
+//
+// Concurrency model:
+//   - rootCtx is created in New() and cancelled exactly once when the
+//     server is told to stop (StopCh closed). All sync manager contexts
+//     are derived from it, so an HTTP-level shutdown propagates into
+//     in-flight git operations.
+//   - s.mu protects s.deps.Cfg, s.sync, s.syncCancel, and shuttingDown.
+//     The lock is held only across in-memory mutations; potentially
+//     slow side effects (mgr.Start, mgr.Stop, git I/O) happen outside.
+//   - actionMu serializes all calls into sync.Manager.Start and
+//     sync.Manager.Stop. The sync package writes m.cancel/m.done in
+//     Start without internal locking, so concurrent Start+Stop on the
+//     same manager would be a race. actionMu makes those calls
+//     strictly sequential across applyConfig and shutdown.
+//   - shuttingDown is set under s.mu; applyConfig checks it under s.mu
+//     and skips its action if shutdown has begun.
 type Server struct {
 	deps Deps
 
-	mu         sync.Mutex
-	sync       *mindsync.Manager // nil when sync disabled or stopped
-	syncCancel context.CancelFunc
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+
+	// actionMu serializes Start/Stop calls on any sync.Manager owned by
+	// this Server. Held outside s.mu. See concurrency model above.
+	actionMu sync.Mutex
+
+	mu           sync.Mutex
+	sync         *mindsync.Manager // nil when sync disabled or stopped
+	syncCancel   context.CancelFunc
+	shuttingDown bool
 }
 
 // New constructs the HTTP handler. It starts the sync manager if the
@@ -68,23 +92,68 @@ func New(d Deps) http.Handler {
 	if d.GetVersion == nil {
 		d.GetVersion = func() string { return "" }
 	}
-	s := &Server{deps: d}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Server{deps: d, rootCtx: ctx, rootCancel: cancel}
 
 	if d.Cfg != nil && d.Cfg.Sync.Enabled && len(d.Cfg.Sync.Remotes()) > 0 {
-		s.startSync(context.Background())
+		// Start outside any lock — the supervisor lock doesn't exist yet,
+		// and Start may block on initial sync. Hold actionMu to satisfy
+		// the contract that Start/Stop are never concurrent on the same
+		// manager (matters once a StopCh listener is wired below).
+		mgr, syncCtx, syncCancel := s.newSyncManager()
+		s.actionMu.Lock()
+		err := mgr.Start(syncCtx)
+		s.actionMu.Unlock()
+		if err != nil {
+			syncCancel()
+			slog.Error("failed to start sync", slog.Any("error", err))
+		} else {
+			s.mu.Lock()
+			s.sync = mgr
+			s.syncCancel = syncCancel
+			s.mu.Unlock()
+		}
 	}
 
-	// Stop sync when the server is told to stop.
+	// Stop sync when the server is told to stop. Cancel rootCtx first
+	// so any in-flight git operations get a chance to exit cleanly
+	// before mgr.Stop() waits for the loop to drain.
 	if d.StopCh != nil {
 		go func() {
 			<-d.StopCh
-			s.stopSync()
+			s.shutdown()
 		}()
 	}
 
 	mux := http.NewServeMux()
 	s.register(mux)
 	return logging.RecoverMiddleware(logging.RequestMiddleware(mux))
+}
+
+// shutdown is called exactly once when StopCh closes. It cancels the
+// root context (signalling all derived sync contexts), then stops the
+// running sync manager. Subsequent applyConfig calls become no-ops.
+// Holds actionMu around mgr.Stop to serialize with any in-flight
+// applyConfig.act.run that may be starting a manager.
+func (s *Server) shutdown() {
+	s.mu.Lock()
+	if s.shuttingDown {
+		s.mu.Unlock()
+		return
+	}
+	s.shuttingDown = true
+	mgr := s.sync
+	s.sync = nil
+	s.syncCancel = nil
+	s.mu.Unlock()
+
+	// Cancel root first so git operations in-flight see the cancellation.
+	s.rootCancel()
+	if mgr != nil {
+		s.actionMu.Lock()
+		mgr.Stop()
+		s.actionMu.Unlock()
+	}
 }
 
 // register wires every endpoint. Handler methods live on *Server so they
@@ -111,74 +180,112 @@ func (s *Server) register(mux *http.ServeMux) {
 // ---------------------------------------------------------------------
 // Sync supervisor
 // ---------------------------------------------------------------------
+//
+// The supervisor follows a strict lock discipline: s.mu is held only
+// while inspecting/mutating in-memory pointers. Any blocking call into
+// sync.Manager (Start, Stop, Status) happens outside s.mu. Callers
+// computing a transition while holding the lock build a small action
+// struct and then execute it after Unlock.
 
-// startSync creates a new sync.Manager from the current config and starts
-// it. Caller must NOT hold s.mu (we take it here).
-func (s *Server) startSync(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.startSyncLocked(ctx)
-}
-
-func (s *Server) startSyncLocked(ctx context.Context) {
-	if s.sync != nil {
-		return
-	}
+// newSyncManager constructs a sync.Manager plus a child context derived
+// from rootCtx. The returned context is what Start should be passed; the
+// returned cancel cancels just that child (independent of rootCtx).
+func (s *Server) newSyncManager() (*mindsync.Manager, context.Context, context.CancelFunc) {
+	syncCtx, cancel := context.WithCancel(s.rootCtx)
 	mgr := mindsync.NewManager(s.deps.Wiki.Root(), s.deps.CfgPath, s.deps.Cfg, s.deps.Wiki)
-	syncCtx, cancel := context.WithCancel(ctx)
-	if err := mgr.Start(syncCtx); err != nil {
-		cancel()
-		slog.Error("failed to start sync", slog.Any("error", err))
-		return
-	}
-	s.sync = mgr
-	s.syncCancel = cancel
+	return mgr, syncCtx, cancel
 }
 
-// stopSync stops the running sync manager, if any. Safe to call when
-// sync is already stopped.
-func (s *Server) stopSync() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stopSyncLocked()
+// syncAction describes the side effect applyConfig wants performed
+// after releasing s.mu. Exactly one of stop/start (or both) may be set.
+type syncAction struct {
+	stopOld  *mindsync.Manager
+	stopOldC context.CancelFunc
+	startNew *mindsync.Manager
+	startCtx context.Context // context to pass to startNew.Start
 }
 
-func (s *Server) stopSyncLocked() {
-	if s.sync == nil {
-		return
+// runAction executes a syncAction, serializing Start/Stop calls under
+// actionMu so they can't race with shutdown() or each other.
+func (s *Server) runAction(a syncAction) {
+	// Stop first so the new manager doesn't race the old one on the
+	// shared shadow clone directory.
+	if a.stopOld != nil {
+		s.actionMu.Lock()
+		a.stopOld.Stop()
+		s.actionMu.Unlock()
+		if a.stopOldC != nil {
+			a.stopOldC()
+		}
 	}
-	s.sync.Stop()
-	if s.syncCancel != nil {
-		s.syncCancel()
+	if a.startNew != nil {
+		s.actionMu.Lock()
+		// If shutdown ran while we were waiting, skip the start entirely
+		// — the manager's context is already cancelled and shutdown has
+		// declared we're tearing down. Without this check we'd briefly
+		// start a goroutine that exits on its first select, which is
+		// harmless but wastes a MkdirAll and clutters the logs.
+		s.mu.Lock()
+		down := s.shuttingDown
+		s.mu.Unlock()
+		if !down {
+			if err := a.startNew.Start(a.startCtx); err != nil {
+				slog.Error("failed to start sync", slog.Any("error", err))
+			}
+		}
+		s.actionMu.Unlock()
 	}
-	s.sync = nil
-	s.syncCancel = nil
 }
 
 // applyConfig reconciles the running sync manager with a new config.
-// - disabled -> enabled: start a fresh manager
-// - enabled -> disabled: stop the manager
-// - both enabled, interval unchanged: hot-reload mappings
-// - both enabled, interval changed: stop + start to pick up the new ticker
-// Caller must hold s.mu.
-func (s *Server) applyConfigLocked(newCfg *config.Config) {
+//   - disabled -> enabled: start a fresh manager
+//   - enabled -> disabled: stop the manager
+//   - both enabled, interval unchanged: hot-reload mappings in place
+//   - both enabled, interval changed: stop + start (ticker is captured
+//     at Start time and can't be retuned in place)
+//
+// Mutations to s.deps.Cfg, s.sync, s.syncCancel happen under s.mu;
+// blocking Start/Stop calls happen after Unlock via runAction, which
+// uses actionMu to serialize with shutdown().
+func (s *Server) applyConfig(newCfg *config.Config) {
+	s.mu.Lock()
+	if s.shuttingDown {
+		s.mu.Unlock()
+		slog.Warn("settings change applied during shutdown; sync not reconfigured")
+		return
+	}
 	s.deps.Cfg = newCfg
 
 	wantSync := newCfg.Sync.Enabled && len(newCfg.Sync.Remotes()) > 0
+	var act syncAction
+
 	switch {
 	case !wantSync && s.sync != nil:
-		s.stopSyncLocked()
+		// enabled -> disabled
+		act.stopOld, act.stopOldC = s.sync, s.syncCancel
+		s.sync, s.syncCancel = nil, nil
+
 	case wantSync && s.sync == nil:
-		s.startSyncLocked(context.Background())
+		// disabled -> enabled
+		mgr, syncCtx, cancel := s.newSyncManager()
+		s.sync, s.syncCancel = mgr, cancel
+		act.startNew, act.startCtx = mgr, syncCtx
+
 	case wantSync && s.sync != nil:
 		if s.sync.Interval() != newCfg.Sync.ParseInterval() {
-			// Interval is captured at Start time; need a restart.
-			s.stopSyncLocked()
-			s.startSyncLocked(context.Background())
+			// Interval changed — full restart needed.
+			act.stopOld, act.stopOldC = s.sync, s.syncCancel
+			mgr, syncCtx, cancel := s.newSyncManager()
+			s.sync, s.syncCancel = mgr, cancel
+			act.startNew, act.startCtx = mgr, syncCtx
 		} else if err := s.sync.Reload(newCfg); err != nil {
+			// Reload is cheap and in-memory; safe under lock.
 			slog.Error("sync reload failed", slog.Any("error", err))
 		}
 	}
+	s.mu.Unlock()
+
+	s.runAction(act)
 }
 
 // ---------------------------------------------------------------------
@@ -329,11 +436,13 @@ func (s *Server) putSettings(rw http.ResponseWriter, r *http.Request) {
 
 	// Hot-reload the running sync supervisor. This replaces the previous
 	// behaviour where settings only took effect after /api/restart.
-	s.mu.Lock()
-	s.applyConfigLocked(&incoming)
-	s.mu.Unlock()
+	// applyConfig handles its own locking; potentially slow Start/Stop
+	// calls happen outside the lock so other handlers stay responsive.
+	// During shutdown, applyConfig logs and returns; the config file is
+	// already on disk so the next start will pick up the user's intent.
+	s.applyConfig(&incoming)
 
-	slog.Info("settings saved and applied", slog.String("path", s.deps.CfgPath))
+	slog.Info("settings saved", slog.String("path", s.deps.CfgPath))
 	writeJSON(rw, &incoming)
 }
 
@@ -396,12 +505,13 @@ func (s *Server) staticHandler() http.Handler {
 	})
 }
 
-// writeJSON encodes v as application/json. Errors are logged but not
-// surfaced to the client (the connection is usually already half-written
-// by the time encoding fails on something).
+// writeJSON encodes v as application/json. If encoding fails we can't
+// recover (headers are already sent), but we log at Warn so operators
+// see persistent serialization bugs. Common causes: nil channels in
+// structs, unexported fields that need a marshaler, or cyclic graphs.
 func writeJSON(rw http.ResponseWriter, v any) {
 	rw.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(rw).Encode(v); err != nil {
-		slog.Debug("response encode failed", slog.Any("error", err))
+		slog.Warn("response encode failed", slog.Any("error", err))
 	}
 }
