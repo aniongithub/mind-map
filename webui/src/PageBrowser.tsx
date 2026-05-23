@@ -15,6 +15,9 @@ interface PageBrowserProps {
     onNavigate: (path: string) => void;
     /** Row ⋯ menu actions. Forwarded to both list and tree renderers. */
     onRowAction?: (action: RowAction, page: Page) => void;
+    selectMode?: boolean;
+    selected?: Set<string>;
+    onToggleSelect?: (path: string) => void;
 }
 
 // Search input + sort cycle + page-list-or-tree. Owns sortMode and
@@ -29,6 +32,9 @@ export function PageBrowser({
     currentPath,
     onNavigate,
     onRowAction,
+    selectMode,
+    selected,
+    onToggleSelect,
 }: PageBrowserProps) {
     const [sortMode, setSortMode] = useState<SortMode>(() => {
         const saved = localStorage.getItem('mm-sort-mode');
@@ -94,6 +100,9 @@ export function PageBrowser({
                     currentPath={currentPath}
                     onNavigate={onNavigate}
                     onRowAction={onRowAction}
+                    selectMode={selectMode}
+                    selected={selected}
+                    onToggleSelect={onToggleSelect}
                 />
             ) : (
                 <PageList
@@ -102,6 +111,9 @@ export function PageBrowser({
                     currentPath={currentPath}
                     onNavigate={onNavigate}
                     onRowAction={onRowAction}
+                    selectMode={selectMode}
+                    selected={selected}
+                    onToggleSelect={onToggleSelect}
                 />
             )}
         </>

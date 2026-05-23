@@ -1095,3 +1095,82 @@ mark {
     font-size: 13px;
     text-align: center;
 }
+
+/* --- Select mode (multi-select) ---
+ *
+ * Toolbar replaces the breadcrumbs/search context while active; rows
+ * grow a checkbox at the left. The whole row is clickable to toggle,
+ * but the checkbox is a real <input> for keyboard and a11y.
+ */
+
+.select-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--tile-bg);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.select-count {
+    flex: 1 1 auto;
+    color: var(--fg);
+    font-weight: 500;
+}
+
+.select-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.select-action {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 4px 10px;
+    border-radius: 3px;
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.select-action:hover:not(:disabled) { background: var(--bg); }
+.select-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.select-action.destructive { color: #c33; border-color: #d99; }
+.select-action.destructive:hover:not(:disabled) {
+    background: #fee;
+    color: #a00;
+}
+@media (prefers-color-scheme: dark) {
+    .select-action.destructive { border-color: #803030; }
+    .select-action.destructive:hover:not(:disabled) {
+        background: #2a1414;
+        color: #ff8080;
+    }
+}
+
+.row-checkbox {
+    flex: 0 0 auto;
+    margin: 0;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+.page-item.selected,
+.tree-row.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.page-item.selected:hover,
+.tree-row.selected:hover {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* In select mode the whole sidebar list cursors as pointer — clicking
+ * a row toggles selection. Visually the row stays the same; the
+ * checkbox is the only added affordance. */
+.page-list.select-mode .page-item,
+.page-list.select-mode .tree-row.has-page {
+    cursor: pointer;
+}

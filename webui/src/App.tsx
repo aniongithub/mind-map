@@ -5,6 +5,7 @@ import { PageBrowser } from './PageBrowser';
 import { RowAction } from './RowActions';
 import { DeleteConfirm } from './DeleteConfirm';
 import { MoveDialog } from './MoveDialog';
+import { SelectToolbar } from './SelectToolbar';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
@@ -145,8 +146,49 @@ export function App() {
     // mode, later).
     const [pendingMove, setPendingMove] = useState<Page[] | null>(null);
 
-    // Handle the per-row ⋯ menu actions. Select is still stubbed —
-    // multi-select arrives in a follow-up commit.
+    // --- Multi-select state ---------------------------------------------
+    //
+    // selectMode is the on/off switch; `selected` is the set of paths.
+    // Entering select mode from a row's ⋯ menu pre-selects that row.
+    // Exiting select mode always clears the selection so re-entering
+    // starts fresh.
+    const [selectMode, setSelectMode] = useState(false);
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+
+    const toggleSelect = (path: string) => {
+        setSelected(prev => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
+    };
+    const exitSelect = () => {
+        setSelectMode(false);
+        setSelected(new Set());
+    };
+
+    // Pages currently selected, as Page objects (matched against the
+    // loaded list). Used by the bulk Move/Delete handlers.
+    const selectedPages = useMemo(
+        () => rawPages.filter(p => selected.has(p.path)),
+        [rawPages, selected],
+    );
+
+    // Escape exits select mode (only when no modal is also open — those
+    // own their own Escape handling).
+    useEffect(() => {
+        if (!selectMode) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            if (pendingDelete !== null || pendingMove !== null) return;
+            exitSelect();
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [selectMode, pendingDelete, pendingMove]);
+
+    // Handle the per-row ⋯ menu actions.
     const handleRowAction = (action: RowAction, page: Page) => {
         switch (action) {
             case 'delete':
@@ -156,8 +198,10 @@ export function App() {
                 setPendingMove([page]);
                 return;
             case 'select':
-                // TODO: enter multi-select mode.
-                console.log('TODO: select', page.path);
+                // Entering select mode pre-selects the triggering row,
+                // so the user can immediately add more.
+                setSelectMode(true);
+                setSelected(new Set([page.path]));
                 return;
         }
     };
@@ -168,7 +212,6 @@ export function App() {
         try {
             // Delete sequentially so a partial failure leaves a clear
             // boundary in the index (and in the log). The set is small
-            // — single page today, "a few" once bulk-delete lands —
             // so the latency cost is negligible.
             for (const p of pendingDelete) {
                 await api.deletePage(p.path);
@@ -176,6 +219,8 @@ export function App() {
             }
             await loadPages();
             setPendingDelete(null);
+            // If this was a bulk delete, also leave select mode.
+            if (selectMode) exitSelect();
         } catch (e) {
             console.error('delete failed:', e);
             window.alert(`Delete failed: ${e instanceof Error ? e.message : e}`);
@@ -504,6 +549,14 @@ export function App() {
                 </div>
                 {!sidebarCollapsed && (
                     <>
+                        {selectMode && (
+                            <SelectToolbar
+                                count={selected.size}
+                                onMove={() => setPendingMove(selectedPages)}
+                                onDelete={() => setPendingDelete(selectedPages)}
+                                onCancel={exitSelect}
+                            />
+                        )}
                         <PageBrowser
                             pages={rawPages}
                             searchQuery={searchQuery}
@@ -513,6 +566,9 @@ export function App() {
                             currentPath={current?.path}
                             onNavigate={navigate}
                             onRowAction={handleRowAction}
+                            selectMode={selectMode}
+                            selected={selected}
+                            onToggleSelect={toggleSelect}
                         />
                         <div class="status-bar">
                             <span>{pageCount} pages</span>
@@ -705,6 +761,7 @@ export function App() {
                         setCurrent(null);
                     }
                     setPendingMove(null);
+                    if (selectMode) exitSelect();
                     await loadPages();
                 }}
             />

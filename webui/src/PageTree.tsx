@@ -61,6 +61,10 @@ interface PageTreeProps {
      * overflow button is rendered.
      */
     onRowAction?: (action: RowAction, page: Page) => void;
+    /** When true, page-bearing rows show a checkbox. */
+    selectMode?: boolean;
+    selected?: Set<string>;
+    onToggleSelect?: (path: string) => void;
 }
 
 // Outlook-style tree view. Used by the "A→Z path" sort mode.
@@ -71,7 +75,10 @@ interface PageTreeProps {
 //   - The chevron always toggles, never navigates.
 //   - Collapsed state is persisted in localStorage so reloads keep the
 //     user's expansion preferences. Default: everything expanded.
-export function PageTree({ pages, searchQuery, currentPath, onNavigate, onRowAction }: PageTreeProps) {
+export function PageTree({
+    pages, searchQuery, currentPath, onNavigate, onRowAction,
+    selectMode, selected, onToggleSelect,
+}: PageTreeProps) {
     const tree = useMemo(() => buildPageTree(pages), [pages]);
 
     const [collapsed, setCollapsed] = useState<Set<string>>(() => {
@@ -96,7 +103,7 @@ export function PageTree({ pages, searchQuery, currentPath, onNavigate, onRowAct
     };
 
     return (
-        <ul class="page-list page-tree">
+        <ul class={`page-list page-tree ${selectMode ? 'select-mode' : ''}`}>
             {tree.children.map(child => (
                 <TreeRow
                     key={child.path}
@@ -108,6 +115,9 @@ export function PageTree({ pages, searchQuery, currentPath, onNavigate, onRowAct
                     onNavigate={onNavigate}
                     searchQuery={searchQuery}
                     onRowAction={onRowAction}
+                    selectMode={selectMode}
+                    selected={selected}
+                    onToggleSelect={onToggleSelect}
                 />
             ))}
         </ul>
@@ -123,14 +133,30 @@ interface TreeRowProps {
     onNavigate: (path: string) => void;
     searchQuery: string;
     onRowAction?: (action: RowAction, page: Page) => void;
+    selectMode?: boolean;
+    selected?: Set<string>;
+    onToggleSelect?: (path: string) => void;
 }
 
-function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, searchQuery, onRowAction }: TreeRowProps) {
+function TreeRow({
+    node, depth, collapsed, onToggle, currentPath, onNavigate, searchQuery, onRowAction,
+    selectMode, selected, onToggleSelect,
+}: TreeRowProps) {
     const hasChildren = node.children.length > 0;
     const isCollapsed = collapsed.has(node.path);
     const isActive = currentPath === node.path && node.page !== undefined;
+    const isSelectable = !!node.page;
+    const isSelected = selectMode && isSelectable && selected?.has(node.path);
 
     const handleRowClick = () => {
+        // In select mode, clicking a selectable row toggles selection
+        // and never navigates. Folder-only rows still toggle expansion
+        // — they aren't selectable anyway, and the expansion is the
+        // only useful interaction they have.
+        if (selectMode && isSelectable) {
+            onToggleSelect?.(node.path);
+            return;
+        }
         if (node.page) onNavigate(node.path);
         else if (hasChildren) onToggle(node.path);
     };
@@ -145,7 +171,7 @@ function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, se
     return (
         <>
             <li
-                class={`tree-row ${isActive ? 'active' : ''} ${node.page ? 'has-page' : 'folder-only'} ${hasChildren ? 'has-children' : 'leaf'}`}
+                class={`tree-row ${isActive ? 'active' : ''} ${node.page ? 'has-page' : 'folder-only'} ${hasChildren ? 'has-children' : 'leaf'} ${isSelected ? 'selected' : ''}`}
                 style={{ paddingLeft: `${8 + depth * 12}px` }}
                 onClick={handleRowClick}
             >
@@ -154,14 +180,20 @@ function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, se
                     onClick={hasChildren ? handleChevronClick : undefined}
                     aria-hidden="true"
                 >&#9656;</span>
+                {selectMode && isSelectable && (
+                    <input
+                        type="checkbox"
+                        class="row-checkbox"
+                        checked={!!isSelected}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => onToggleSelect?.(node.path)}
+                        aria-label={`Select ${label}`}
+                    />
+                )}
                 <span class="tree-label">
                     <Highlighted text={label} query={searchQuery} />
                 </span>
-                {/* Folder-only nodes have no page to act on — skip the
-                  * overflow button. Tree-wide actions (e.g. "delete
-                  * folder") would be a separate, much more dangerous
-                  * surface and aren't part of this design. */}
-                {onRowAction && node.page && (
+                {!selectMode && onRowAction && node.page && (
                     <RowActionsButton page={node.page} onAction={onRowAction} />
                 )}
             </li>
@@ -176,6 +208,9 @@ function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, se
                     onNavigate={onNavigate}
                     searchQuery={searchQuery}
                     onRowAction={onRowAction}
+                    selectMode={selectMode}
+                    selected={selected}
+                    onToggleSelect={onToggleSelect}
                 />
             ))}
         </>
