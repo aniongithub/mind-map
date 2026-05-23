@@ -5,15 +5,41 @@
 .DESCRIPTION
     Downloads the native Windows binary, configures MCP clients,
     and optionally installs mind-map as a persistent service.
+.PARAMETER Version
+    Install a specific release tag (e.g. v0.49). Defaults to the latest
+    release. Useful for testing prereleases without making them latest.
+    Equivalent env var: MINDMAP_VERSION
 .EXAMPLE
     irm https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | iex
+.EXAMPLE
+    # Pin a specific release. The piped form can't pass parameters directly,
+    # so set the env var first:
+    $env:MINDMAP_VERSION = "v0.49"
+    irm https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1 | iex
 #>
+param(
+    [string]$Version = ""
+)
 
-# Auto-elevate to admin (needed for Windows Service installation)
+# Resolve version from -Version or MINDMAP_VERSION env var. The env var is
+# how the piped `irm | iex` form supplies a value, since parameters don't
+# flow through a pipeline of strings. Explicit -Version wins if both set.
+if (-not $Version -and $env:MINDMAP_VERSION) {
+    $Version = $env:MINDMAP_VERSION
+}
+
+# Auto-elevate to admin (needed for Windows Service installation). When we
+# relaunch, propagate the version pin via the env var so the elevated
+# process picks it up (param binding doesn't survive `irm | iex`).
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Requesting administrative privileges..." -ForegroundColor Yellow
     $scriptUrl = "https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1"
-    Start-Process powershell.exe "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& { irm '$scriptUrl' | iex }`"" -Verb RunAs
+    $envPrefix = ""
+    if ($Version) {
+        # Set the env var inside the elevated session before running iex.
+        $envPrefix = "`$env:MINDMAP_VERSION = '$Version'; "
+    }
+    Start-Process powershell.exe "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& { ${envPrefix}irm '$scriptUrl' | iex }`"" -Verb RunAs
     exit
 }
 
@@ -48,14 +74,18 @@ $arch = if ([Environment]::Is64BitOperatingSystem) {
 Write-Ok "windows-$arch"
 
 # ---------------------------------------------------------------------------
-# 2. Get latest version
+# 2. Resolve version
 # ---------------------------------------------------------------------------
 
-Write-Step "Checking latest version..."
-
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-$version = $release.tag_name
-Write-Ok "Latest version: $version"
+if ($Version) {
+    Write-Step "Using pinned version: $Version"
+    $version = $Version
+} else {
+    Write-Step "Checking latest version..."
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+    $version = $release.tag_name
+    Write-Ok "Latest version: $version"
+}
 
 # ---------------------------------------------------------------------------
 # 3. Stop existing service before replacing binary
