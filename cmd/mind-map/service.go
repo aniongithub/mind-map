@@ -174,8 +174,7 @@ var serviceStartCmd = &cobra.Command{
 		// Only print the address if explicitly provided; otherwise the plist
 		// may contain a different addr than the flag default.
 		if cmd.Flags().Changed("addr") {
-			fmt.Printf("  Web UI:       http://%s\n", addr)
-			fmt.Printf("  MCP endpoint: http://%s/mcp\n", addr)
+			fmt.Printf("  Web UI: http://%s\n", addr)
 		}
 		return nil
 	},
