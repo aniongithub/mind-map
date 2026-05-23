@@ -27,6 +27,18 @@ export interface WikiContext {
     top_level_dirs: string[];
 }
 
+/**
+ * Thrown by `api.movePage` when the destination already exists and
+ * `overwrite` was false. Catch this specifically (vs Error) to prompt
+ * the user for confirmation and retry with overwrite=true.
+ */
+export class DestinationExistsError extends Error {
+    constructor(public readonly to: string) {
+        super(`destination already exists: ${to}`);
+        this.name = 'DestinationExistsError';
+    }
+}
+
 class APIClient {
     async getWikiContext(): Promise<WikiContext> {
         const res = await fetch('/api/context');
@@ -74,6 +86,40 @@ class APIClient {
     async deletePage(path: string): Promise<void> {
         const res = await fetch(`/api/pages/${path}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+
+    /**
+     * Move (or rename) a page.
+     *
+     * On HTTP 409 the server signals that the destination already exists.
+     * That case is *recoverable*: the caller should prompt the user for
+     * confirmation and retry with `overwrite=true`. We surface it as a
+     * typed `DestinationExistsError` rather than a generic Error so call
+     * sites can branch on it without parsing strings.
+     *
+     * Any other non-2xx becomes a plain Error with the response text, to
+     * match the rest of this client.
+     */
+    async movePage(from: string, to: string, overwrite = false): Promise<void> {
+        const res = await fetch('/api/pages/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from, to, overwrite }),
+        });
+        if (res.ok) return;
+
+        if (res.status === 409) {
+            // Try to parse the structured body; fall back to a generic
+            // DestinationExistsError if the body isn't what we expect.
+            let body: any = null;
+            try { body = await res.json(); } catch { /* ignore */ }
+            if (body && body.error === 'destination_exists') {
+                throw new DestinationExistsError(to);
+            }
+        }
+
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}${text ? `: ${text.trim()}` : ''}`);
     }
 
     async getBacklinks(path: string): Promise<string[]> {

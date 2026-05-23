@@ -6,12 +6,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -162,6 +164,7 @@ func (s *Server) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/version", s.getVersion)
 	mux.HandleFunc("GET /api/context", s.getContext)
 	mux.HandleFunc("GET /api/pages", s.listPages)
+	mux.HandleFunc("POST /api/pages/move", s.movePage)
 	mux.HandleFunc("GET /api/pages/{path...}", s.getPage)
 	mux.HandleFunc("POST /api/pages", s.createPage)
 	mux.HandleFunc("PUT /api/pages/{path...}", s.updatePage)
@@ -368,6 +371,69 @@ func (s *Server) deletePage(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, map[string]string{"status": "deleted", "path": pagePath})
+}
+
+// movePage handles POST /api/pages/move.
+//
+// Body: {"from": "...", "to": "...", "overwrite": false}
+//
+// Returns:
+//   - 200 with {status, from, to, overwrote} on success.
+//   - 409 with {error:"destination_exists", to} when the destination
+//     already exists and overwrite was not requested. The WebUI uses
+//     the typed error to prompt the user for confirmation and retry
+//     with overwrite=true. Any client treating 409 as a generic
+//     conflict will still get a sensible status code.
+//   - 400 for malformed JSON or missing fields.
+//   - 404 when the source page doesn't exist.
+//   - 500 for anything else.
+func (s *Server) movePage(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		From      string `json:"from"`
+		To        string `json:"to"`
+		Overwrite bool   `json:"overwrite,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.From == "" || req.To == "" {
+		http.Error(rw, "both 'from' and 'to' are required", http.StatusBadRequest)
+		return
+	}
+
+	err := s.deps.Wiki.MovePage(r.Context(), req.From, req.To, wiki.MoveOptions{Overwrite: req.Overwrite})
+	if err == nil {
+		writeJSON(rw, map[string]any{
+			"status":    "moved",
+			"from":      req.From,
+			"to":        req.To,
+			"overwrote": req.Overwrite,
+		})
+		return
+	}
+
+	// Typed: destination exists and caller did not opt in.
+	if errors.Is(err, wiki.ErrDestinationExists) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(rw).Encode(map[string]any{
+			"error": "destination_exists",
+			"to":    req.To,
+		})
+		return
+	}
+
+	// Heuristic: errors.Is doesn't cover the "page not found" string,
+	// since wiki returns those as plain fmt.Errorf values. Map by
+	// substring so the client gets a useful status. Anything else
+	// becomes 500.
+	msg := err.Error()
+	if strings.Contains(msg, "page not found") {
+		http.Error(rw, msg, http.StatusNotFound)
+		return
+	}
+	http.Error(rw, msg, http.StatusInternalServerError)
 }
 
 func (s *Server) searchPages(rw http.ResponseWriter, r *http.Request) {

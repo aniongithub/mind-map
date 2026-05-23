@@ -285,3 +285,117 @@ func TestSettingsChangeDuringShutdown(t *testing.T) {
 		t.Fatalf("expected no manager started, got: %s", rec.Body.String())
 	}
 }
+
+func TestMovePageSuccess(t *testing.T) {
+	h := newTestServer(t)
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "src", "content": "hello"})
+
+	rec := doJSON(t, h, "POST", "/api/pages/move", map[string]any{
+		"from": "src",
+		"to":   "dst",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("move: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp["status"] != "moved" || resp["from"] != "src" || resp["to"] != "dst" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	if resp["overwrote"] != false {
+		t.Errorf("expected overwrote=false, got %+v", resp["overwrote"])
+	}
+
+	// Source gone, destination has the content.
+	if rec := doJSON(t, h, "GET", "/api/pages/src", nil); rec.Code != 404 {
+		t.Errorf("source should be 404 after move, got %d", rec.Code)
+	}
+	if rec := doJSON(t, h, "GET", "/api/pages/dst", nil); !strings.Contains(rec.Body.String(), "hello") {
+		t.Errorf("destination missing content: %s", rec.Body.String())
+	}
+}
+
+func TestMovePageDestinationExistsReturns409(t *testing.T) {
+	h := newTestServer(t)
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "src", "content": "hello"})
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "dst", "content": "occupied"})
+
+	rec := doJSON(t, h, "POST", "/api/pages/move", map[string]any{
+		"from": "src",
+		"to":   "dst",
+	})
+	if rec.Code != 409 {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("409 body not JSON (must be machine-parseable so client can branch on it): %v", err)
+	}
+	if resp["error"] != "destination_exists" {
+		t.Errorf("expected error=destination_exists, got %+v", resp)
+	}
+	if resp["to"] != "dst" {
+		t.Errorf("expected to=dst, got %+v", resp)
+	}
+
+	// Both pages must still be intact — failed move must not move anything.
+	if rec := doJSON(t, h, "GET", "/api/pages/src", nil); !strings.Contains(rec.Body.String(), "hello") {
+		t.Errorf("source clobbered after failed move: %s", rec.Body.String())
+	}
+	if rec := doJSON(t, h, "GET", "/api/pages/dst", nil); !strings.Contains(rec.Body.String(), "occupied") {
+		t.Errorf("destination clobbered after failed move: %s", rec.Body.String())
+	}
+}
+
+func TestMovePageOverwriteSucceeds(t *testing.T) {
+	h := newTestServer(t)
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "src", "content": "hello"})
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "dst", "content": "occupied"})
+
+	rec := doJSON(t, h, "POST", "/api/pages/move", map[string]any{
+		"from":      "src",
+		"to":        "dst",
+		"overwrite": true,
+	})
+	if rec.Code != 200 {
+		t.Fatalf("overwrite move: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["overwrote"] != true {
+		t.Errorf("expected overwrote=true, got %+v", resp)
+	}
+
+	// Source gone; destination now has source content.
+	if rec := doJSON(t, h, "GET", "/api/pages/src", nil); rec.Code != 404 {
+		t.Errorf("source should be 404, got %d", rec.Code)
+	}
+	if rec := doJSON(t, h, "GET", "/api/pages/dst", nil); !strings.Contains(rec.Body.String(), "hello") {
+		t.Errorf("destination has wrong content: %s", rec.Body.String())
+	}
+}
+
+func TestMovePageSourceMissingReturns404(t *testing.T) {
+	h := newTestServer(t)
+	rec := doJSON(t, h, "POST", "/api/pages/move", map[string]any{
+		"from": "does-not-exist",
+		"to":   "anywhere",
+	})
+	if rec.Code != 404 {
+		t.Fatalf("expected 404 for missing source, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMovePageValidatesRequiredFields(t *testing.T) {
+	h := newTestServer(t)
+	rec := doJSON(t, h, "POST", "/api/pages/move", map[string]any{"from": "x"})
+	if rec.Code != 400 {
+		t.Errorf("missing 'to' should be 400, got %d", rec.Code)
+	}
+	rec = doJSON(t, h, "POST", "/api/pages/move", map[string]any{"to": "y"})
+	if rec.Code != 400 {
+		t.Errorf("missing 'from' should be 400, got %d", rec.Code)
+	}
+}
