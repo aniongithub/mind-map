@@ -126,6 +126,28 @@ func (m *Manager) Stop() {
 	slog.Info("sync manager stopped")
 }
 
+// Reload swaps in a new configuration and rebuilds sync targets without
+// interrupting the background loop. Callers that need to handle an
+// enabled/disabled transition or an interval change should Stop and create
+// a fresh Manager instead — those changes can't be applied in-place.
+func (m *Manager) Reload(newCfg *config.Config) error {
+	if newCfg == nil {
+		return fmt.Errorf("nil config")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg = newCfg
+	m.rebuildTargetsLocked()
+	slog.Info("sync manager reloaded", slog.Int("targets", len(m.targets)))
+	return nil
+}
+
+// Interval returns the configured sync interval. Used by supervisors to
+// detect interval changes that require a full restart.
+func (m *Manager) Interval() time.Duration {
+	return m.interval
+}
+
 // RegisterMapping adds a prefix-to-remote mapping, saves config, and
 // sets up the sync target. Returns immediately; sync happens on next cycle.
 func (m *Manager) RegisterMapping(prefix, remote string) error {
