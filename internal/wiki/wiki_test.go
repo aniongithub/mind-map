@@ -418,7 +418,7 @@ func TestIncrementalReindex(t *testing.T) {
 	}
 
 	// Reindex with no changes -- should be a no-op
-	if err := w.Reindex(ctx); err != nil {
+	if _, err := w.Reindex(ctx); err != nil {
 		t.Fatalf("Reindex (no changes): %v", err)
 	}
 	wctx, _ = w.Context(ctx)
@@ -428,7 +428,7 @@ func TestIncrementalReindex(t *testing.T) {
 
 	// Add a file externally, then reindex
 	writeFile(t, dir, "new-external.md", "# External\n\nAdded outside the API.\n")
-	if err := w.Reindex(ctx); err != nil {
+	if _, err := w.Reindex(ctx); err != nil {
 		t.Fatalf("Reindex (after add): %v", err)
 	}
 	wctx, _ = w.Context(ctx)
@@ -447,7 +447,7 @@ func TestIncrementalReindex(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "Go.md")); err != nil {
 		t.Fatalf("remove Go.md: %v", err)
 	}
-	if err := w.Reindex(ctx); err != nil {
+	if _, err := w.Reindex(ctx); err != nil {
 		t.Fatalf("Reindex (after delete): %v", err)
 	}
 	wctx, _ = w.Context(ctx)
@@ -472,7 +472,7 @@ func TestIncrementalReindex(t *testing.T) {
 	newMtime := oldMtime.Add(2 * time.Second)
 	os.Chtimes(modPath, newMtime, newMtime)
 
-	if err := w.Reindex(ctx); err != nil {
+	if _, err := w.Reindex(ctx); err != nil {
 		t.Fatalf("Reindex (after modify): %v", err)
 	}
 	p, err = w.GetPage(ctx, "index")

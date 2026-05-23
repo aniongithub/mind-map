@@ -92,7 +92,7 @@ func Open(root string) (*Wiki, error) {
 		slog.Warn("pages_fts rebuild failed", slog.Any("error", err))
 	}
 
-	if err := w.Reindex(context.Background()); err != nil {
+	if _, err := w.Reindex(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initial index: %w", err)
 	}

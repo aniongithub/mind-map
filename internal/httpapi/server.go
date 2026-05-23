@@ -173,6 +173,7 @@ func (s *Server) register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("GET /api/settings/path", s.getSettingsPath)
 	mux.HandleFunc("POST /api/restart", s.postRestart)
+	mux.HandleFunc("POST /api/reindex", s.postReindex)
 	mux.HandleFunc("GET /api/sync/status", s.getSyncStatus)
 	mux.Handle("/", s.staticHandler())
 }
@@ -491,6 +492,21 @@ func (s *Server) getSyncStatus(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, mindsync.Status{Enabled: false})
+}
+
+// postReindex handles POST /api/reindex. Triggers a full reindex pass
+// against the on-disk wiki and returns the resulting stats.
+//
+// Safe to call repeatedly and safe to call concurrently with the sync
+// loop — wiki.Reindex acquires per-page locks rather than holding a
+// global lock, so requests don't stall the server.
+func (s *Server) postReindex(rw http.ResponseWriter, r *http.Request) {
+	stats, err := s.deps.Wiki.Reindex(r.Context())
+	if err != nil {
+		http.Error(rw, "reindex: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, stats)
 }
 
 func (s *Server) staticHandler() http.Handler {

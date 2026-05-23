@@ -98,6 +98,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | `list_pages` | List pages, optionally filtered by path prefix |
 | `get_backlinks` | Get all pages that link to a given page |
 | `register_sync` | Register a wiki path prefix to sync with a git remote |
+| `reindex_wiki` | Force a reindex pass against on-disk markdown (rarely needed; useful after edits made outside the wiki API) |
 
 ## Wiki Features
 

@@ -17,12 +17,15 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/wiki"
 )
 
 // Reindexer is the interface the sync engine uses to trigger a wiki reindex
-// after pulling changes.
+// after pulling changes. The returned ReindexStats are logged at INFO by
+// the implementation; the sync loop itself just cares that the call
+// succeeded.
 type Reindexer interface {
-	Reindex(ctx context.Context) error
+	Reindex(ctx context.Context) (wiki.ReindexStats, error)
 }
 
 // RemoteStatus represents the sync state for a single remote.
@@ -373,7 +376,7 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	if wantPull {
 		m.copyToWiki(t)
 		if m.reindexer != nil {
-			if err := m.reindexer.Reindex(ctx); err != nil {
+			if _, err := m.reindexer.Reindex(ctx); err != nil {
 				slog.Warn("reindex after pull failed", slog.Any("error", err))
 			}
 		}

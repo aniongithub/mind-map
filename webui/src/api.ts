@@ -27,6 +27,20 @@ export interface WikiContext {
     top_level_dirs: string[];
 }
 
+/**
+ * Stats returned by a reindex pass. Mirrors wiki.ReindexStats on the
+ * server. `total` is the count of markdown files found on disk; the
+ * change counts (added/updated/removed) sum with `unchanged` to `total`.
+ */
+export interface ReindexStats {
+    total: number;
+    added: number;
+    updated: number;
+    removed: number;
+    unchanged: number;
+    elapsed_ms: number;
+}
+
 class APIClient {
     async getWikiContext(): Promise<WikiContext> {
         const res = await fetch('/api/context');
@@ -86,6 +100,24 @@ class APIClient {
         const res = await fetch('/api/links');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return (await res.json()) || [];
+    }
+
+    /**
+     * Force a full reindex pass over the on-disk wiki. Use when files
+     * have been edited outside the wiki API (e.g. directly on disk via
+     * an editor or a sync that produced files in unusual ways) and the
+     * server's index needs to catch up.
+     *
+     * Returns stats: how many pages were added, updated, removed,
+     * left unchanged, and how long the pass took.
+     */
+    async reindex(): Promise<ReindexStats> {
+        const res = await fetch('/api/reindex', { method: 'POST' });
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status}${text ? `: ${text.trim()}` : ''}`);
+        }
+        return res.json();
     }
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -283,5 +284,77 @@ func TestSettingsChangeDuringShutdown(t *testing.T) {
 	rec = doJSON(t, h, "GET", "/api/sync/status", nil)
 	if !strings.Contains(rec.Body.String(), "\"enabled\":false") {
 		t.Fatalf("expected no manager started, got: %s", rec.Body.String())
+	}
+}
+
+func TestReindex(t *testing.T) {
+	h := newTestServer(t)
+	// Seed one page.
+	doJSON(t, h, "POST", "/api/pages", map[string]string{"path": "p", "content": "v1"})
+
+	rec := doJSON(t, h, "POST", "/api/reindex", nil)
+	if rec.Code != 200 {
+		t.Fatalf("reindex: %d %s", rec.Code, rec.Body.String())
+	}
+	var stats map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	// Total is the count of .md files found on disk. The seed page
+	// should be there; CreatePage already indexed it, so a fresh
+	// reindex should see total=1 with unchanged=1 (matching mtime).
+	if total, _ := stats["total"].(float64); int(total) != 1 {
+		t.Errorf("total = %v, want 1", stats["total"])
+	}
+	if _, ok := stats["elapsed_ms"]; !ok {
+		t.Errorf("response missing elapsed_ms: %+v", stats)
+	}
+}
+
+func TestReindexDetectsDirectFilesystemChanges(t *testing.T) {
+	// The whole point of a manual reindex is recovering from changes
+	// made outside the wiki API. Simulate that by writing a markdown
+	// file directly to the wiki root.
+	dir := t.TempDir()
+	w, err := wiki.Open(dir)
+	if err != nil {
+		t.Fatalf("open wiki: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+
+	h := New(Deps{
+		Wiki:       w,
+		CfgPath:    filepath.Join(dir, "config.json"),
+		Cfg:        config.DefaultConfig(),
+		GetVersion: func() string { return "test" },
+		StopCh:     make(chan struct{}),
+	})
+
+	// Drop a page directly on disk — bypassing CreatePage so the index
+	// has no entry for it yet.
+	if err := os.WriteFile(filepath.Join(dir, "fresh.md"), []byte("# fresh\n"), 0o644); err != nil {
+		t.Fatalf("write fresh page: %v", err)
+	}
+
+	// It shouldn't be visible via GET yet, even though it's on disk.
+	if rec := doJSON(t, h, "GET", "/api/pages/fresh", nil); rec.Code == 200 {
+		// Open() ran a reindex at startup, but the file we wrote came
+		// AFTER. So it should be 404 until we reindex.
+		t.Fatalf("page already indexed before reindex (got %d)", rec.Code)
+	}
+
+	rec := doJSON(t, h, "POST", "/api/reindex", nil)
+	if rec.Code != 200 {
+		t.Fatalf("reindex: %d %s", rec.Code, rec.Body.String())
+	}
+	var stats map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &stats)
+	if added, _ := stats["added"].(float64); int(added) != 1 {
+		t.Errorf("added = %v, want 1 (the freshly-written page)", stats["added"])
+	}
+
+	// Now it should be reachable.
+	if rec := doJSON(t, h, "GET", "/api/pages/fresh", nil); rec.Code != 200 {
+		t.Errorf("page still not indexed after reindex (got %d body=%s)", rec.Code, rec.Body.String())
 	}
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
-import { api, Page } from './api';
+import { api, Page, ReindexStats } from './api';
 import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
 import { GraphView } from './GraphView';
@@ -54,6 +54,12 @@ export function App() {
     const [configPath, setConfigPath] = useState('');
     const [settingsDirty, setSettingsDirty] = useState(false);
     const [settingsSaved, setSettingsSaved] = useState(false);
+
+    // Reindex state (settings panel). reindexResult is null until the
+    // first run completes; reindexError holds the most recent failure.
+    const [reindexing, setReindexing] = useState(false);
+    const [reindexResult, setReindexResult] = useState<ReindexStats | null>(null);
+    const [reindexError, setReindexError] = useState<string | null>(null);
     const [isDark, setIsDark] = useState(() => {
         const saved = localStorage.getItem('mm-theme');
         if (saved) return saved === 'dark';
@@ -305,6 +311,24 @@ export function App() {
         }
     };
 
+    const handleReindex = async () => {
+        setReindexing(true);
+        setReindexError(null);
+        try {
+            const stats = await api.reindex();
+            setReindexResult(stats);
+            // The list of pages may have changed (files written
+            // outside the API are now indexed); refresh so the sidebar
+            // reflects the new state.
+            await loadPages();
+        } catch (e) {
+            console.error('Reindex failed:', e);
+            setReindexError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setReindexing(false);
+        }
+    };
+
     const updateSync = (field: keyof SyncSettings, value: string | boolean) => {
         if (!settings) return;
         setSettings({
@@ -536,6 +560,37 @@ export function App() {
                                         </div>
                                     </div>
                                 )}
+                            </div>
+
+                            <div class="settings-section">
+                                <div class="settings-section-title">Index</div>
+                                <div class="settings-field-help">
+                                    The wiki keeps a search index over the on-disk markdown files. It updates automatically
+                                    on writes and on every sync pull. Use this if you've edited files outside the wiki
+                                    (e.g. directly on disk) and want the index to catch up without restarting.
+                                </div>
+                                <div class="settings-reindex-row">
+                                    <button
+                                        class="btn"
+                                        type="button"
+                                        onClick={handleReindex}
+                                        disabled={reindexing}
+                                    >
+                                        {reindexing ? 'Reindexing…' : 'Reindex now'}
+                                    </button>
+                                    {reindexResult && !reindexing && !reindexError && (
+                                        <div class="settings-reindex-status">
+                                            {reindexResult.total} pages
+                                            {' · '}
+                                            +{reindexResult.added} / ~{reindexResult.updated} / −{reindexResult.removed}
+                                            {' · '}
+                                            {reindexResult.elapsed_ms} ms
+                                        </div>
+                                    )}
+                                    {reindexError && (
+                                        <div class="settings-reindex-error">{reindexError}</div>
+                                    )}
+                                </div>
                             </div>
 
                             <div class="settings-actions">

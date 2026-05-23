@@ -18,9 +18,9 @@ type mockReindexer struct {
 	calls int
 }
 
-func (m *mockReindexer) Reindex(_ context.Context) error {
+func (m *mockReindexer) Reindex(_ context.Context) (wiki.ReindexStats, error) {
 	m.calls++
-	return nil
+	return wiki.ReindexStats{}, nil
 }
 
 // setupBareRemote creates a bare git repo to act as the remote.
