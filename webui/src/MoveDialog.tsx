@@ -62,6 +62,13 @@ export function MoveDialog({ open, sources, allPages, onCancel, onDone }: MoveDi
     // Build folder + page lists from allPages. Folders are derived from
     // the unique prefix of every page path. Source paths are excluded —
     // moving a page onto itself is a no-op the engine would reject.
+    //
+    // The wiki root is included as a special "<root>" folder entry —
+    // without it, single-segment pages (e.g. "index") would have no
+    // folder destinations at all, and there'd be no way to move a
+    // page *out* of a subdirectory back to the top level. The entry's
+    // path is the empty string; toPathFor handles that as a no-prefix
+    // destination.
     const sourcePaths = useMemo(() => new Set(sources.map(s => s.path)), [sources]);
     const allEntries = useMemo<DestEntry[]>(() => {
         const folders = new Set<string>();
@@ -72,7 +79,9 @@ export function MoveDialog({ open, sources, allPages, onCancel, onDone }: MoveDi
             }
         }
         const out: DestEntry[] = [];
-        // Folders first (alphabetically), then pages.
+        // Wiki root always comes first.
+        out.push({ label: '<root>', path: '', type: 'folder' });
+        // Then real folders (alphabetically), then pages.
         for (const f of [...folders].sort()) {
             out.push({ label: f, path: f, type: 'folder' });
         }
@@ -86,11 +95,14 @@ export function MoveDialog({ open, sources, allPages, onCancel, onDone }: MoveDi
         return out;
     }, [allPages, sourcePaths]);
 
-    // Filter substring-match against the path. Case-insensitive.
+    // Filter substring-match against the path (and label, so the
+    // <root> entry is reachable by typing "root"). Case-insensitive.
     const filtered = useMemo(() => {
         if (!filter.trim()) return allEntries.slice(0, 50);
         const q = filter.toLowerCase();
-        return allEntries.filter(e => e.path.toLowerCase().includes(q)).slice(0, 50);
+        return allEntries.filter(e =>
+            e.path.toLowerCase().includes(q) || e.label.toLowerCase().includes(q)
+        ).slice(0, 50);
     }, [allEntries, filter]);
 
     // If the user typed a path that doesn't exist as either a folder or
@@ -116,7 +128,9 @@ export function MoveDialog({ open, sources, allPages, onCancel, onDone }: MoveDi
     const toPathFor = (dest: DestEntry, source: Page): string => {
         if (dest.type === 'folder') {
             const leaf = source.path.split('/').pop() ?? source.path;
-            return `${dest.path}/${leaf}`;
+            // The wiki root has an empty path; concatenating with '/' would
+            // produce '/leaf'. Strip that to just 'leaf'.
+            return dest.path === '' ? leaf : `${dest.path}/${leaf}`;
         }
         return dest.path;
     };
@@ -304,22 +318,31 @@ export function MoveDialog({ open, sources, allPages, onCancel, onDone }: MoveDi
                     // Multi-source moves disable page targets — only
                     // folders are meaningful destinations for N pages.
                     const disabledForMulti = multi && e.type === 'page';
+                    const isRoot = e.type === 'folder' && e.path === '';
                     return (
                         <li key={`${e.type}:${e.path}`}>
                             <button
                                 type="button"
-                                class={`move-item ${e.type === 'folder' ? 'is-folder' : 'is-page'}`}
+                                class={`move-item ${e.type === 'folder' ? 'is-folder' : 'is-page'} ${isRoot ? 'is-root' : ''}`}
                                 role="option"
                                 disabled={busy || disabledForMulti}
-                                title={disabledForMulti ? 'Cannot move multiple pages onto a single page' : e.path}
+                                title={
+                                    disabledForMulti
+                                        ? 'Cannot move multiple pages onto a single page'
+                                        : isRoot
+                                            ? 'Wiki root (top level)'
+                                            : e.path
+                                }
                                 onClick={() => doMove(s => toPathFor(e, s), false)}
                             >
                                 <span class="move-item-icon" aria-hidden="true">
-                                    {e.type === 'folder' ? '📁' : '📄'}
+                                    {isRoot ? '🏠' : e.type === 'folder' ? '📁' : '📄'}
                                 </span>
                                 <span class="move-item-main">
                                     <span class="move-item-label">{e.label}</span>
-                                    <span class="move-item-sub">{e.path}</span>
+                                    <span class="move-item-sub">
+                                        {isRoot ? 'top level of the wiki' : e.path}
+                                    </span>
                                 </span>
                             </button>
                         </li>
