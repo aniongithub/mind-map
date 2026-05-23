@@ -66,7 +66,12 @@ export function App() {
         return saved ? parseInt(saved, 10) : 240;
     });
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-        return localStorage.getItem('mm-sidebar-collapsed') === 'true';
+        const saved = localStorage.getItem('mm-sidebar-collapsed');
+        if (saved !== null) return saved === 'true';
+        // No saved preference: collapse by default on mobile so the page
+        // content is visible on first load. Users tap the chevron to open.
+        return typeof window !== 'undefined'
+            && window.matchMedia('(max-width: 767px)').matches;
     });
     const isResizing = useRef(false);
 

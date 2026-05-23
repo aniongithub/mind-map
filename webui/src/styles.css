@@ -780,8 +780,15 @@ mark {
 /* --- Mobile --- */
 
 @media (max-width: 767px) {
-    .sidebar { width: 100%; position: absolute; z-index: 10; height: 100%; display: none; }
-    .sidebar.open { display: flex; }
+    /* When expanded on a narrow viewport, the sidebar overlays the page
+     * rather than squeezing it to nothing. Collapsed state stays in flow
+     * as a thin strip (~48px) so the chevron is always reachable. */
+    .sidebar:not(.collapsed) {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        z-index: 10;
+    }
     .page-header { padding: 24px 20px 12px; }
     .page-title { font-size: 28px; }
     .page-body, .editor-container { padding: 16px 20px 20px; }
