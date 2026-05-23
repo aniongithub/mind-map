@@ -125,6 +125,7 @@ $SkillDirs = @(
     "$env:USERPROFILE\.copilot\skills\mind-map"
     "$env:USERPROFILE\.claude\skills\mind-map"
     "$env:USERPROFILE\.agents\skills\mind-map"
+    "$env:APPDATA\opencode\skills\mind-map"
 )
 
 foreach ($dir in $SkillDirs) {
@@ -288,6 +289,62 @@ if (Test-Path "$env:USERPROFILE\.cursor") {
     Set-McpConfig "$env:USERPROFILE\.cursor\mcp.json" "Cursor"
 }
 
+# OpenCode (https://opencode.ai) — different config shape: top-level "mcp"
+# (not "mcpServers"), command is an array, and entries carry "enabled": true.
+# Primary path on Windows is %APPDATA%\opencode\opencode.json; the script also
+# accepts the .jsonc variant if it's the file the user already has.
+$openCodeEntry = [PSCustomObject]@{
+    type    = "local"
+    command = @($BinaryPath)
+    enabled = $true
+}
+
+function Set-OpenCodeMcpConfig {
+    param([string]$ConfigPath)
+    try {
+        if (Test-Path $ConfigPath) {
+            $content = Get-Content -Raw $ConfigPath | ConvertFrom-Json
+            if (-not $content.mcp) {
+                $content | Add-Member -NotePropertyName "mcp" -NotePropertyValue ([PSCustomObject]@{})
+            }
+            if ($content.mcp.PSObject.Properties.Name -contains "mind-map") {
+                $content.mcp.PSObject.Properties.Remove("mind-map")
+            }
+            $content.mcp | Add-Member -NotePropertyName "mind-map" -NotePropertyValue $openCodeEntry
+            $content | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
+            Write-Ok "OpenCode — configured in $ConfigPath"
+        } else {
+            $dir = Split-Path $ConfigPath -Parent
+            if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $config = [PSCustomObject]@{
+                '$schema' = "https://opencode.ai/config.json"
+                mcp       = [PSCustomObject]@{
+                    "mind-map" = $openCodeEntry
+                }
+            }
+            $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8
+            Write-Ok "OpenCode — created $ConfigPath"
+        }
+    } catch {
+        Write-Warn "OpenCode — could not update $ConfigPath"
+    }
+}
+
+$openCodeDir = "$env:APPDATA\opencode"
+$openCodeJson = Join-Path $openCodeDir "opencode.json"
+$openCodeJsonc = Join-Path $openCodeDir "opencode.jsonc"
+$openCodeCfg = $null
+if (Test-Path $openCodeJson) {
+    $openCodeCfg = $openCodeJson
+} elseif (Test-Path $openCodeJsonc) {
+    $openCodeCfg = $openCodeJsonc
+} elseif ((Test-Path $openCodeDir) -or (Get-Command opencode -ErrorAction SilentlyContinue)) {
+    $openCodeCfg = $openCodeJson
+}
+if ($openCodeCfg) {
+    Set-OpenCodeMcpConfig $openCodeCfg
+}
+
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
@@ -305,4 +362,4 @@ Write-Host "To uninstall mind-map completely:" -ForegroundColor DarkGray
 Write-Host "  mind-map service uninstall                        # remove service (if installed)" -ForegroundColor DarkGray
 Write-Host "  Remove-Item -Recurse '$InstallDir'                # remove binary" -ForegroundColor DarkGray
 Write-Host "  Remove-Item -Recurse '$env:USERPROFILE\.mind-map' # remove wiki data" -ForegroundColor DarkGray
-Write-Host "  Remove-Item -Recurse '$env:USERPROFILE\.copilot\skills\mind-map', '$env:USERPROFILE\.claude\skills\mind-map', '$env:USERPROFILE\.agents\skills\mind-map'" -ForegroundColor DarkGray
+Write-Host "  Remove-Item -Recurse '$env:USERPROFILE\.copilot\skills\mind-map', '$env:USERPROFILE\.claude\skills\mind-map', '$env:USERPROFILE\.agents\skills\mind-map', '$env:APPDATA\opencode\skills\mind-map'" -ForegroundColor DarkGray
