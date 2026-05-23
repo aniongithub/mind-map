@@ -4,6 +4,7 @@ import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
 import { RowAction } from './RowActions';
 import { DeleteConfirm } from './DeleteConfirm';
+import { MoveDialog } from './MoveDialog';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
@@ -139,16 +140,20 @@ export function App() {
     const [pendingDelete, setPendingDelete] = useState<Page[] | null>(null);
     const [deleting, setDeleting] = useState(false);
 
-    // Handle the per-row ⋯ menu actions. Move and Select are stubbed —
-    // they'll get real modals in follow-up commits.
+    // Same shape for moves: holding the source list lets a single
+    // MoveDialog cover both single-row (from ⋯) and bulk (from select
+    // mode, later).
+    const [pendingMove, setPendingMove] = useState<Page[] | null>(null);
+
+    // Handle the per-row ⋯ menu actions. Select is still stubbed —
+    // multi-select arrives in a follow-up commit.
     const handleRowAction = (action: RowAction, page: Page) => {
         switch (action) {
             case 'delete':
                 setPendingDelete([page]);
                 return;
             case 'move':
-                // TODO: open Move dialog with filter + folder/page list.
-                console.log('TODO: move', page.path);
+                setPendingMove([page]);
                 return;
             case 'select':
                 // TODO: enter multi-select mode.
@@ -685,6 +690,23 @@ export function App() {
                 onCancel={() => setPendingDelete(null)}
                 onConfirm={confirmDelete}
                 busy={deleting}
+            />
+            <MoveDialog
+                open={pendingMove !== null}
+                sources={pendingMove ?? []}
+                allPages={rawPages}
+                onCancel={() => setPendingMove(null)}
+                onDone={async () => {
+                    // If the currently-open page is among the moved
+                    // ones, clear the editor — its old path no longer
+                    // exists. The user can navigate to the new path via
+                    // the refreshed sidebar.
+                    if (current && pendingMove?.some(p => p.path === current.path)) {
+                        setCurrent(null);
+                    }
+                    setPendingMove(null);
+                    await loadPages();
+                }}
             />
         </div>
     );
