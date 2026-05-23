@@ -134,8 +134,10 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
 fi
 
-# Install SKILL.md for agent discovery
-SKILL_URL="https://raw.githubusercontent.com/${REPO}/main/SKILL.md"
+# Install SKILL.md for agent discovery. Fetch from the same git ref as the
+# binary so the documented tool surface matches what got installed. Tags
+# are valid refs on raw.githubusercontent.com.
+SKILL_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/SKILL.md"
 SKILL_DIRS=(
   "${HOME}/.copilot/skills/mind-map"
   "${HOME}/.claude/skills/mind-map"

@@ -30,13 +30,23 @@ if (-not $Version -and $env:MINDMAP_VERSION) {
 
 # Auto-elevate to admin (needed for Windows Service installation). When we
 # relaunch, propagate the version pin via the env var so the elevated
-# process picks it up (param binding doesn't survive `irm | iex`).
+# process picks it up (param binding doesn't survive `irm | iex`). The
+# elevated session also re-downloads install.ps1 itself; if a version is
+# pinned, fetch the install.ps1 from that release tag too — the latest
+# install.ps1 may not match the binary the user asked for.
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Requesting administrative privileges..." -ForegroundColor Yellow
-    $scriptUrl = "https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1"
+    if ($Version) {
+        # Versioned release: /releases/download/<tag>/install.ps1
+        $scriptUrl = "https://github.com/aniongithub/mind-map/releases/download/$Version/install.ps1"
+    } else {
+        # Convenience redirect to the latest release.
+        $scriptUrl = "https://github.com/aniongithub/mind-map/releases/latest/download/install.ps1"
+    }
     $envPrefix = ""
     if ($Version) {
-        # Set the env var inside the elevated session before running iex.
+        # Set the env var inside the elevated session before running iex,
+        # so the re-downloaded script picks up the same pin.
         $envPrefix = "`$env:MINDMAP_VERSION = '$Version'; "
     }
     Start-Process powershell.exe "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"& { ${envPrefix}irm '$scriptUrl' | iex }`"" -Verb RunAs
@@ -150,7 +160,7 @@ if ($userPath -notlike "*$InstallDir*") {
 
 Write-Step "Installing SKILL.md for agent discovery..."
 
-$SkillUrl = "https://raw.githubusercontent.com/$Repo/main/SKILL.md"
+$SkillUrl = "https://raw.githubusercontent.com/$Repo/$version/SKILL.md"
 $SkillDirs = @(
     "$env:USERPROFILE\.copilot\skills\mind-map"
     "$env:USERPROFILE\.claude\skills\mind-map"
