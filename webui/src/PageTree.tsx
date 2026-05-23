@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
 import { Page } from './api';
 import { Highlighted } from './search';
+import { RowAction, RowActionsButton } from './RowActions';
 
 // Tree node used by the "A→Z path" sort mode. Folders are derived from
 // path segments; a node carries a real Page when there's an actual page
@@ -53,6 +54,13 @@ interface PageTreeProps {
     searchQuery: string;
     currentPath?: string;
     onNavigate: (path: string) => void;
+    /**
+     * Called when the user picks an action from a row's ⋯ menu. Only
+     * fires for nodes that have a real page — folder-only intermediate
+     * nodes don't get an overflow button. Optional: when omitted, no
+     * overflow button is rendered.
+     */
+    onRowAction?: (action: RowAction, page: Page) => void;
 }
 
 // Outlook-style tree view. Used by the "A→Z path" sort mode.
@@ -63,7 +71,7 @@ interface PageTreeProps {
 //   - The chevron always toggles, never navigates.
 //   - Collapsed state is persisted in localStorage so reloads keep the
 //     user's expansion preferences. Default: everything expanded.
-export function PageTree({ pages, searchQuery, currentPath, onNavigate }: PageTreeProps) {
+export function PageTree({ pages, searchQuery, currentPath, onNavigate, onRowAction }: PageTreeProps) {
     const tree = useMemo(() => buildPageTree(pages), [pages]);
 
     const [collapsed, setCollapsed] = useState<Set<string>>(() => {
@@ -99,6 +107,7 @@ export function PageTree({ pages, searchQuery, currentPath, onNavigate }: PageTr
                     currentPath={currentPath}
                     onNavigate={onNavigate}
                     searchQuery={searchQuery}
+                    onRowAction={onRowAction}
                 />
             ))}
         </ul>
@@ -113,9 +122,10 @@ interface TreeRowProps {
     currentPath?: string;
     onNavigate: (path: string) => void;
     searchQuery: string;
+    onRowAction?: (action: RowAction, page: Page) => void;
 }
 
-function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, searchQuery }: TreeRowProps) {
+function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, searchQuery, onRowAction }: TreeRowProps) {
     const hasChildren = node.children.length > 0;
     const isCollapsed = collapsed.has(node.path);
     const isActive = currentPath === node.path && node.page !== undefined;
@@ -147,6 +157,13 @@ function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, se
                 <span class="tree-label">
                     <Highlighted text={label} query={searchQuery} />
                 </span>
+                {/* Folder-only nodes have no page to act on — skip the
+                  * overflow button. Tree-wide actions (e.g. "delete
+                  * folder") would be a separate, much more dangerous
+                  * surface and aren't part of this design. */}
+                {onRowAction && node.page && (
+                    <RowActionsButton page={node.page} onAction={onRowAction} />
+                )}
             </li>
             {hasChildren && !isCollapsed && node.children.map(child => (
                 <TreeRow
@@ -158,6 +175,7 @@ function TreeRow({ node, depth, collapsed, onToggle, currentPath, onNavigate, se
                     currentPath={currentPath}
                     onNavigate={onNavigate}
                     searchQuery={searchQuery}
+                    onRowAction={onRowAction}
                 />
             ))}
         </>

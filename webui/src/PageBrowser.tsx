@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'preact/hooks';
 import { Page } from './api';
 import { PageList } from './PageList';
 import { PageTree } from './PageTree';
+import { RowAction } from './RowActions';
 import { SortToggle, SortMode, sortModes } from './SortToggle';
 
 interface PageBrowserProps {
@@ -12,6 +13,8 @@ interface PageBrowserProps {
     onSearchClear: () => void;
     currentPath?: string;
     onNavigate: (path: string) => void;
+    /** Row ⋯ menu actions. Forwarded to both list and tree renderers. */
+    onRowAction?: (action: RowAction, page: Page) => void;
 }
 
 // Search input + sort cycle + page-list-or-tree. Owns sortMode and
@@ -25,6 +28,7 @@ export function PageBrowser({
     onSearchClear,
     currentPath,
     onNavigate,
+    onRowAction,
 }: PageBrowserProps) {
     const [sortMode, setSortMode] = useState<SortMode>(() => {
         const saved = localStorage.getItem('mm-sort-mode');
@@ -89,6 +93,7 @@ export function PageBrowser({
                     searchQuery={searchQuery}
                     currentPath={currentPath}
                     onNavigate={onNavigate}
+                    onRowAction={onRowAction}
                 />
             ) : (
                 <PageList
@@ -96,6 +101,7 @@ export function PageBrowser({
                     searchQuery={searchQuery}
                     currentPath={currentPath}
                     onNavigate={onNavigate}
+                    onRowAction={onRowAction}
                 />
             )}
         </>

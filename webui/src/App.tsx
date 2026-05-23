@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api, Page } from './api';
 import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
+import { RowAction } from './RowActions';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
@@ -128,6 +129,36 @@ export function App() {
             setRawPages(list);
         } catch (e) {
             console.error('Failed to load pages:', e);
+        }
+    };
+
+    // Handle the per-row ⋯ menu actions. Move and Select are stubbed —
+    // they'll get real modals in follow-up commits. Delete is wired
+    // end-to-end with a confirm() placeholder (which will be replaced
+    // by a proper modal in a later commit).
+    const handleRowAction = async (action: RowAction, page: Page) => {
+        switch (action) {
+            case 'delete': {
+                const label = page.title ? `"${page.title}" (${page.path})` : page.path;
+                if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+                try {
+                    await api.deletePage(page.path);
+                    if (current?.path === page.path) setCurrent(null);
+                    await loadPages();
+                } catch (e) {
+                    console.error('delete failed:', e);
+                    window.alert(`Delete failed: ${e instanceof Error ? e.message : e}`);
+                }
+                return;
+            }
+            case 'move':
+                // TODO: open Move dialog with filter + folder/page list.
+                console.log('TODO: move', page.path);
+                return;
+            case 'select':
+                // TODO: enter multi-select mode.
+                console.log('TODO: select', page.path);
+                return;
         }
     };
 
@@ -459,6 +490,7 @@ export function App() {
                             onSearchClear={() => { setSearchQuery(''); loadPages(); }}
                             currentPath={current?.path}
                             onNavigate={navigate}
+                            onRowAction={handleRowAction}
                         />
                         <div class="status-bar">
                             <span>{pageCount} pages</span>

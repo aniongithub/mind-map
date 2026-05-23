@@ -204,6 +204,9 @@ html, body, #root {
 }
 
 .page-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 8px 20px;
     font-size: 14px;
     cursor: pointer;
@@ -217,6 +220,11 @@ html, body, #root {
     background: var(--tile-bg);
     border-left-color: var(--accent);
     font-weight: 500;
+}
+
+.page-item-main {
+    flex: 1 1 auto;
+    min-width: 0; /* let title/path actually ellipsize inside flex */
 }
 
 .page-item-title {
@@ -793,4 +801,125 @@ mark {
     .page-title { font-size: 28px; }
     .page-body, .editor-container { padding: 16px 20px 20px; }
     .backlinks { padding: 16px 20px; }
+}
+
+/* --- Popover (row overflow menu) ---
+ *
+ * Fixed-positioned flyout used by the ⋯ menu on tree/list rows. Position
+ * is computed in JS; CSS just handles look and pointer-events.
+ *
+ * The surface uses position: fixed so it escapes any sidebar overflow
+ * clipping — important for rows near the bottom of the sidebar where a
+ * dropdown that lives inside the scrolled container would be cut off.
+ */
+
+.popover-surface {
+    position: fixed;
+    z-index: 100;
+    min-width: 140px;
+    padding: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.popover-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.popover-item:hover,
+.popover-item:focus-visible {
+    background: var(--tile-bg);
+    outline: none;
+}
+
+.popover-item.destructive { color: #c33; }
+.popover-item.destructive:hover,
+.popover-item.destructive:focus-visible {
+    background: #fee;
+    color: #a00;
+}
+
+.popover-item-icon {
+    width: 16px;
+    text-align: center;
+    color: var(--fg-muted);
+    flex: 0 0 auto;
+}
+.popover-item.destructive .popover-item-icon { color: inherit; }
+
+@media (prefers-color-scheme: dark) {
+    .popover-item.destructive:hover,
+    .popover-item.destructive:focus-visible {
+        background: #2a1414;
+        color: #ff8080;
+    }
+}
+
+/* --- Row overflow trigger (⋯) ---
+ *
+ * Visibility model:
+ *   - Devices with hover: visible only when the parent row is hovered or
+ *     the trigger itself has focus (keyboard tab).
+ *   - Devices without hover (touch): always visible.
+ *
+ * The button stays tab-focusable in both modes — never hidden from the
+ * tab order, only visually hidden.
+ */
+
+.row-overflow-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg-muted);
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s, background 0.1s;
+    font-size: 16px;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+
+.row-overflow-btn:hover,
+.row-overflow-btn:focus-visible,
+.row-overflow-btn[aria-expanded="true"] {
+    background: var(--tile-bg);
+    color: var(--fg);
+    outline: none;
+}
+
+.tree-row:hover .row-overflow-btn,
+.page-item:hover .row-overflow-btn,
+.row-overflow-btn:focus-visible,
+.row-overflow-btn[aria-expanded="true"] {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    /* Touch devices have no useful "hover" — show the button at all
+     * times. Slightly dimmed so it doesn't dominate the row. */
+    .row-overflow-btn { opacity: 0.65; }
+    .row-overflow-btn[aria-expanded="true"] { opacity: 1; }
 }
