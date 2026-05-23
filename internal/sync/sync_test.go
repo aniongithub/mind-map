@@ -140,8 +140,8 @@ func TestManagerMultiRepo(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Sync.Enabled = true
 	cfg.Sync.Interval = "5s"
-	cfg.Sync.AddMapping("projects/alpha", remote1)
-	cfg.Sync.AddMapping("projects/beta", remote2)
+	cfg.Sync.AddMapping("projects/alpha", remote1, config.SyncBidirectional)
+	cfg.Sync.AddMapping("projects/beta", remote2, config.SyncBidirectional)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	config.Save(cfgPath, cfg)
@@ -197,7 +197,7 @@ func TestRegisterMapping(t *testing.T) {
 	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
 
 	// Register dynamically
-	if err := mgr.RegisterMapping("projects/new", remote); err != nil {
+	if err := mgr.RegisterMapping("projects/new", remote, config.SyncBidirectional); err != nil {
 		t.Fatalf("RegisterMapping: %v", err)
 	}
 
@@ -208,6 +208,38 @@ func TestRegisterMapping(t *testing.T) {
 	}
 	if loaded.Sync.Mappings[0].Prefix != "projects/new" {
 		t.Errorf("prefix = %q", loaded.Sync.Mappings[0].Prefix)
+	}
+	if loaded.Sync.Mappings[0].Direction != config.SyncBidirectional {
+		t.Errorf("direction = %q, want bidirectional", loaded.Sync.Mappings[0].Direction)
+	}
+
+	// Re-registering with a different direction must update in place,
+	// not append a duplicate. This mirrors the "pin direction" workflow
+	// agents would use when switching a project to pull-only.
+	if err := mgr.RegisterMapping("projects/new", remote, config.SyncPull); err != nil {
+		t.Fatalf("RegisterMapping (direction change): %v", err)
+	}
+	loaded, _ = config.Load(cfgPath)
+	if len(loaded.Sync.Mappings) != 1 {
+		t.Fatalf("expected 1 mapping after re-register, got %d", len(loaded.Sync.Mappings))
+	}
+	if loaded.Sync.Mappings[0].Direction != config.SyncPull {
+		t.Errorf("direction after re-register = %q, want pull", loaded.Sync.Mappings[0].Direction)
+	}
+
+	// Empty direction normalizes to bidirectional.
+	if err := mgr.RegisterMapping("projects/another", remote, ""); err != nil {
+		t.Fatalf("RegisterMapping (empty direction): %v", err)
+	}
+	loaded, _ = config.Load(cfgPath)
+	var got config.SyncDirection
+	for _, m := range loaded.Sync.Mappings {
+		if m.Prefix == "projects/another" {
+			got = m.Direction
+		}
+	}
+	if got != config.SyncBidirectional {
+		t.Errorf("empty direction did not normalize to bidirectional, got %q", got)
 	}
 
 	// HasMapping should work

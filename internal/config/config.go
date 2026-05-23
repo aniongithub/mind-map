@@ -82,15 +82,25 @@ func (s *SyncConfig) ResolveRemote(pagePath string) string {
 	return s.Default
 }
 
-// AddMapping adds or updates a prefix-to-remote mapping.
-func (s *SyncConfig) AddMapping(prefix, remote string) {
+// AddMapping adds or updates a prefix-to-remote mapping with the given
+// direction. An empty or unrecognized direction normalizes to
+// SyncBidirectional, so callers that don't care about direction can
+// pass "" (or SyncBidirectional explicitly) and get the safe default.
+//
+// If a mapping for prefix already exists, its remote and direction are
+// both replaced — this is treated as a re-registration, not an additive
+// op, so an existing mapping switching from bidirectional to pull-only
+// (or vice versa) propagates cleanly.
+func (s *SyncConfig) AddMapping(prefix, remote string, direction SyncDirection) {
+	direction = direction.Normalize()
 	for i, m := range s.Mappings {
 		if m.Prefix == prefix {
 			s.Mappings[i].Remote = remote
+			s.Mappings[i].Direction = direction
 			return
 		}
 	}
-	s.Mappings = append(s.Mappings, SyncMapping{Prefix: prefix, Remote: remote})
+	s.Mappings = append(s.Mappings, SyncMapping{Prefix: prefix, Remote: remote, Direction: direction})
 }
 
 // Remotes returns all unique remotes (default + mappings).

@@ -149,19 +149,25 @@ func (m *Manager) Interval() time.Duration {
 	return m.interval
 }
 
-// RegisterMapping adds a prefix-to-remote mapping, saves config, and
-// sets up the sync target. Returns immediately; sync happens on next cycle.
-func (m *Manager) RegisterMapping(prefix, remote string) error {
+// RegisterMapping adds a prefix-to-remote mapping with the given
+// direction, saves config, and sets up the sync target. An empty
+// direction normalizes to bidirectional. Returns immediately; sync
+// happens on the next cycle.
+func (m *Manager) RegisterMapping(prefix, remote string, direction config.SyncDirection) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.cfg.Sync.AddMapping(prefix, remote)
+	m.cfg.Sync.AddMapping(prefix, remote, direction)
 	if err := config.Save(m.cfgPath, m.cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
 	m.rebuildTargetsLocked()
-	slog.Info("sync mapping registered", slog.String("prefix", prefix), slog.String("remote", remote))
+	slog.Info("sync mapping registered",
+		slog.String("prefix", prefix),
+		slog.String("remote", remote),
+		slog.String("direction", string(direction.Normalize())),
+	)
 	return nil
 }
 
