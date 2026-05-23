@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
-import { Page } from './mcp';
+import { Page } from './api';
 import { PageList } from './PageList';
 import { PageTree } from './PageTree';
 import { SortToggle, SortMode, sortModes } from './SortToggle';

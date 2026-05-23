@@ -2,25 +2,34 @@
 set -euo pipefail
 
 # mind-map installer
-# Downloads the latest release binary.
+# Downloads a release binary. Defaults to the latest release.
 #
 # Usage:
 #   curl -fsSL https://github.com/aniongithub/mind-map/releases/latest/download/install.sh | bash
 #   curl -fsSL ... | bash -s -- --install-dir /usr/local/bin
+#   curl -fsSL ... | bash -s -- --version v0.49        # pin a specific release
+#   MINDMAP_VERSION=v0.49 curl -fsSL ... | bash         # env var equivalent
 
 REPO="aniongithub/mind-map"
 INSTALL_DIR="${HOME}/.local/bin"
 SKIP_MCP_CONFIG=false
+# Pre-seed VERSION from the environment so users can `MINDMAP_VERSION=... curl | bash`
+# without needing `bash -s --` plumbing. The --version flag overrides if both are set.
+VERSION="${MINDMAP_VERSION:-}"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir)       INSTALL_DIR="$2"; shift 2 ;;
     --skip-mcp-config)   SKIP_MCP_CONFIG=true; shift ;;
+    --version)           VERSION="$2"; shift 2 ;;
     --help|-h)
-      echo "Usage: install.sh [--install-dir DIR] [--skip-mcp-config]"
+      echo "Usage: install.sh [--install-dir DIR] [--skip-mcp-config] [--version TAG]"
       echo "  --install-dir       Installation directory (default: ~/.local/bin)"
       echo "  --skip-mcp-config   Skip MCP client configuration (used by install.ps1)"
+      echo "  --version TAG       Install a specific release tag (e.g. v0.49). Defaults"
+      echo "                      to the latest release. Useful for testing prereleases."
+      echo "                      Equivalent env var: MINDMAP_VERSION"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -58,13 +67,17 @@ get_latest_version() {
 PLATFORM="$(detect_platform)"
 echo "==> Detected platform: ${PLATFORM}"
 
-VERSION="$(get_latest_version)"
-if [[ -z "$VERSION" ]]; then
-  echo "Error: Could not determine latest release version."
-  echo "Check: https://github.com/${REPO}/releases"
-  exit 1
+if [[ -n "$VERSION" ]]; then
+  echo "==> Using pinned version: ${VERSION}"
+else
+  VERSION="$(get_latest_version)"
+  if [[ -z "$VERSION" ]]; then
+    echo "Error: Could not determine latest release version."
+    echo "Check: https://github.com/${REPO}/releases"
+    exit 1
+  fi
+  echo "==> Latest version: ${VERSION}"
 fi
-echo "==> Latest version: ${VERSION}"
 
 TARBALL_NAME="mind-map-${PLATFORM}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL_NAME}"
@@ -121,8 +134,10 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
 fi
 
-# Install SKILL.md for agent discovery
-SKILL_URL="https://raw.githubusercontent.com/${REPO}/main/SKILL.md"
+# Install SKILL.md for agent discovery. Fetch from the same git ref as the
+# binary so the documented tool surface matches what got installed. Tags
+# are valid refs on raw.githubusercontent.com.
+SKILL_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/SKILL.md"
 SKILL_DIRS=(
   "${HOME}/.copilot/skills/mind-map"
   "${HOME}/.claude/skills/mind-map"

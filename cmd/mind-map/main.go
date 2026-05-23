@@ -2,23 +2,20 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
-	"syscall"
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/httpapi"
 	"github.com/aniongithub/mind-map/internal/logging"
-	"github.com/aniongithub/mind-map/internal/wiki"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
-	mindsync "github.com/aniongithub/mind-map/internal/sync"
+	"github.com/aniongithub/mind-map/internal/wiki"
 	"github.com/aniongithub/mind-map/webui"
 	"github.com/kardianos/service"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -107,7 +104,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	runAsService, _ := cmd.Flags().GetBool("run-as-service")
 
 	if runAsService {
-		// Launched by the OS service manager — delegate to kardianos/service
+		// Launched by the OS service manager — delegate to kardianos/service.
 		addr, _ := cmd.Flags().GetString("addr")
 		webuiDir, _ := cmd.Flags().GetString("webui")
 		idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
@@ -119,33 +116,34 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return svc.Run()
 	}
 
-	// Initialize logging for interactive mode (stderr + optional file)
+	// Interactive mode: stderr + optional file logging.
 	if f := logging.Init(nil, logFile); f != nil {
 		defer f.Close()
 	}
 
-	// HTTP mode
 	addr, _ := cmd.Flags().GetString("addr")
 	webuiDir, _ := cmd.Flags().GetString("webui")
+	idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
 
 	stopCh := make(chan struct{})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	go func() {
 		<-ctx.Done()
 		slog.Info("received interrupt, shutting down")
-		close(stopCh)
+		// stopCh may already be closed (e.g. by /api/restart); guard.
+		select {
+		case <-stopCh:
+		default:
+			close(stopCh)
+		}
 	}()
-
-	// read idle-timeout for the non-service path
-	idleTimeout, _ := cmd.Flags().GetDuration("idle-timeout")
 
 	return runHTTPServer(addr, dir, webuiDir, idleTimeout, stopCh)
 }
 
-// runHTTPServer starts the HTTP server and blocks until stopCh is closed.
-// Shared by both the interactive `serve` command and the system service.
+// runHTTPServer wires the HTTP handler from internal/httpapi and serves it.
+// Shared by the interactive `serve` command and the system service.
 func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
 	w, err := wiki.Open(dir)
 	if err != nil {
@@ -160,241 +158,15 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		cfg = config.DefaultConfig()
 	}
 
-	// Start git sync if enabled and configured
-	var gs *mindsync.Manager
-	if cfg.Sync.Enabled {
-		remotes := cfg.Sync.Remotes()
-		if len(remotes) > 0 {
-			gs = mindsync.NewManager(w.Root(), cfgPath, cfg, w)
-			if err := gs.Start(context.Background()); err != nil {
-				slog.Error("failed to start sync", slog.Any("error", err))
-				gs = nil
-			} else {
-				defer gs.Stop()
-			}
-		}
-	}
-
-	// REST API for wiki operations (used by web UI)
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /api/version", func(rw http.ResponseWriter, r *http.Request) {
-		jsonResponse(rw, map[string]string{"version": getVersion()})
+	handler := httpapi.New(httpapi.Deps{
+		Wiki:       w,
+		CfgPath:    cfgPath,
+		Cfg:        cfg,
+		GetVersion: getVersion,
+		StopCh:     stopCh,
+		WebFS:      resolveWebFS(webuiDir),
 	})
 
-	mux.HandleFunc("GET /api/context", func(rw http.ResponseWriter, r *http.Request) {
-		wctx, err := w.Context(r.Context())
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(rw, wctx)
-	})
-
-	mux.HandleFunc("GET /api/pages", func(rw http.ResponseWriter, r *http.Request) {
-		prefix := r.URL.Query().Get("prefix")
-		pages, err := w.ListPages(r.Context(), prefix)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(rw, pages)
-	})
-
-	mux.HandleFunc("GET /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
-		pagePath := r.PathValue("path")
-		page, err := w.GetPage(r.Context(), pagePath)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusNotFound)
-			return
-		}
-		jsonResponse(rw, page)
-	})
-
-	mux.HandleFunc("POST /api/pages", func(rw http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.Path == "" || req.Content == "" {
-			http.Error(rw, "path and content are required", http.StatusBadRequest)
-			return
-		}
-		if err := w.CreatePage(r.Context(), req.Path, req.Content); err != nil {
-			http.Error(rw, err.Error(), http.StatusConflict)
-			return
-		}
-		rw.WriteHeader(http.StatusCreated)
-		jsonResponse(rw, map[string]string{"status": "created", "path": req.Path})
-	})
-
-	mux.HandleFunc("PUT /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
-		pagePath := r.PathValue("path")
-		var req struct {
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := w.UpdatePage(r.Context(), pagePath, req.Content); err != nil {
-			http.Error(rw, err.Error(), http.StatusNotFound)
-			return
-		}
-		jsonResponse(rw, map[string]string{"status": "updated", "path": pagePath})
-	})
-
-	mux.HandleFunc("DELETE /api/pages/{path...}", func(rw http.ResponseWriter, r *http.Request) {
-		pagePath := r.PathValue("path")
-		if err := w.DeletePage(r.Context(), pagePath); err != nil {
-			http.Error(rw, err.Error(), http.StatusNotFound)
-			return
-		}
-		jsonResponse(rw, map[string]string{"status": "deleted", "path": pagePath})
-	})
-
-	mux.HandleFunc("GET /api/search", func(rw http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query().Get("q")
-		if q == "" {
-			http.Error(rw, "q parameter is required", http.StatusBadRequest)
-			return
-		}
-		results, err := w.Search(r.Context(), q, 20)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(rw, results)
-	})
-
-	mux.HandleFunc("GET /api/backlinks/{path...}", func(rw http.ResponseWriter, r *http.Request) {
-		pagePath := r.PathValue("path")
-		backlinks, err := w.GetBacklinks(r.Context(), pagePath)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(rw, backlinks)
-	})
-
-	mux.HandleFunc("GET /api/links", func(rw http.ResponseWriter, r *http.Request) {
-		links, err := w.AllLinks(r.Context())
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonResponse(rw, links)
-	})
-
-	// Settings API endpoints (UI only, not MCP)
-	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
-		current, err := config.Load(cfgPath)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(current)
-	})
-
-	mux.HandleFunc("PUT /api/settings", func(rw http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(rw, "failed to read body", http.StatusBadRequest)
-			return
-		}
-
-		var incoming config.Config
-		if err := json.Unmarshal(body, &incoming); err != nil {
-			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// Validate: if sync enabled, need at least a default or a mapping
-		if incoming.Sync.Enabled && incoming.Sync.Default == "" && len(incoming.Sync.Mappings) == 0 {
-			http.Error(rw, "sync requires at least a default remote or one mapping", http.StatusBadRequest)
-			return
-		}
-
-		if err := config.Save(cfgPath, &incoming); err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		slog.Info("settings saved", slog.String("path", cfgPath))
-		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(&incoming)
-	})
-
-	mux.HandleFunc("POST /api/restart", func(rw http.ResponseWriter, r *http.Request) {
-		slog.Info("restart requested via API")
-		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(map[string]string{"status": "restarting"})
-
-		// Flush the response before restarting
-		if f, ok := rw.(http.Flusher); ok {
-			f.Flush()
-		}
-
-		logging.SafeGo("restart", func() {
-			// Give the response time to reach the client
-			time.Sleep(500 * time.Millisecond)
-
-			// Graceful shutdown
-			close(stopCh)
-			time.Sleep(500 * time.Millisecond)
-
-			// Self-exec restart
-			exe, err := os.Executable()
-			if err != nil {
-				slog.Error("restart failed: cannot find executable", slog.Any("error", err))
-				return
-			}
-			slog.Info("restarting", slog.String("exe", exe))
-			syscall.Exec(exe, os.Args, os.Environ())
-		})
-	})
-
-	mux.HandleFunc("GET /api/settings/path", func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(map[string]string{"path": cfgPath})
-	})
-
-	mux.HandleFunc("GET /api/sync/status", func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		if gs != nil {
-			json.NewEncoder(rw).Encode(gs.Status())
-		} else {
-			json.NewEncoder(rw).Encode(mindsync.Status{Enabled: false})
-		}
-	})
-
-	var webFS fs.FS
-	if webuiDir != "" {
-		if _, err := os.Stat(webuiDir); err == nil {
-			webFS = os.DirFS(webuiDir)
-		}
-	}
-	if webFS == nil {
-		webFS = webui.DistFS()
-	}
-	if webFS != nil {
-		mux.Handle("/", http.FileServerFS(webFS))
-	} else {
-		mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
-			rw.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(rw, `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
-				<h1>mind-map</h1><p>WebUI not built. Run <code>npm run build</code> in <code>webui/</code></p>
-			</body></html>`)
-		})
-	}
-
-	// Wrap with panic recovery and request logging
-	handler := logging.RecoverMiddleware(logging.RequestMiddleware(mux))
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
@@ -422,9 +194,16 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 	return nil
 }
 
-func jsonResponse(rw http.ResponseWriter, v any) {
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(v)
+// resolveWebFS picks the embedded SPA filesystem unless an override directory
+// is provided and exists. Returns nil when no UI is available; the httpapi
+// package serves a "not built" placeholder in that case.
+func resolveWebFS(webuiDir string) fs.FS {
+	if webuiDir != "" {
+		if _, err := os.Stat(webuiDir); err == nil {
+			return os.DirFS(webuiDir)
+		}
+	}
+	return webui.DistFS()
 }
 
 func main() {

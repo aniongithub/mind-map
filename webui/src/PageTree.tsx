@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
-import { Page } from './mcp';
+import { Page } from './api';
 import { Highlighted } from './search';
 
 // Tree node used by the "A→Z path" sort mode. Folders are derived from

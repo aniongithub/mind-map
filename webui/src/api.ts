@@ -1,4 +1,9 @@
-/** REST API client for mind-map's /api endpoints */
+/**
+ * REST API client for mind-map's /api/* endpoints.
+ *
+ * Note: this is NOT an MCP client. The web UI talks to the Go HTTP server
+ * over plain JSON REST. MCP is only used by AI agents over stdio.
+ */
 
 export interface Page {
     path: string;

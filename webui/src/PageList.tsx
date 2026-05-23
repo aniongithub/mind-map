@@ -1,4 +1,4 @@
-import { Page } from './mcp';
+import { Page } from './api';
 import { Highlighted } from './search';
 
 interface PageListProps {
