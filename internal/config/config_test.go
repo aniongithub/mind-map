@@ -76,24 +76,37 @@ func TestResolveRemote(t *testing.T) {
 func TestAddMapping(t *testing.T) {
 	s := &SyncConfig{}
 
-	s.AddMapping("projects/mind-map", "https://github.com/user/mind-map.wiki.git")
+	s.AddMapping("projects/mind-map", "https://github.com/user/mind-map.wiki.git", SyncBidirectional)
 	if len(s.Mappings) != 1 {
 		t.Fatalf("expected 1 mapping, got %d", len(s.Mappings))
 	}
+	if s.Mappings[0].Direction != SyncBidirectional {
+		t.Errorf("direction = %q, want bidirectional", s.Mappings[0].Direction)
+	}
 
-	// Update existing
-	s.AddMapping("projects/mind-map", "https://github.com/user/mind-map-v2.wiki.git")
+	// Update existing — re-registration replaces both remote and direction.
+	s.AddMapping("projects/mind-map", "https://github.com/user/mind-map-v2.wiki.git", SyncPull)
 	if len(s.Mappings) != 1 {
 		t.Fatalf("expected 1 mapping after update, got %d", len(s.Mappings))
 	}
 	if s.Mappings[0].Remote != "https://github.com/user/mind-map-v2.wiki.git" {
-		t.Errorf("mapping not updated: %q", s.Mappings[0].Remote)
+		t.Errorf("mapping remote not updated: %q", s.Mappings[0].Remote)
+	}
+	if s.Mappings[0].Direction != SyncPull {
+		t.Errorf("mapping direction not updated: %q", s.Mappings[0].Direction)
 	}
 
 	// Add another
-	s.AddMapping("projects/other", "https://github.com/user/other.wiki.git")
+	s.AddMapping("projects/other", "https://github.com/user/other.wiki.git", SyncPush)
 	if len(s.Mappings) != 2 {
 		t.Fatalf("expected 2 mappings, got %d", len(s.Mappings))
+	}
+
+	// Empty direction normalizes to bidirectional so callers that don't
+	// care can pass "" and get the safe default.
+	s.AddMapping("projects/default", "https://github.com/user/default.wiki.git", "")
+	if s.Mappings[2].Direction != SyncBidirectional {
+		t.Errorf("empty direction did not normalize to bidirectional, got %q", s.Mappings[2].Direction)
 	}
 }
 
@@ -128,7 +141,7 @@ func TestSaveAndLoad(t *testing.T) {
 	cfg.Sync.Enabled = true
 	cfg.Sync.Default = "https://github.com/user/wiki.wiki.git"
 	cfg.Sync.Interval = "1m"
-	cfg.Sync.AddMapping("projects/mind-map", "https://github.com/user/mind-map.wiki.git")
+	cfg.Sync.AddMapping("projects/mind-map", "https://github.com/user/mind-map.wiki.git", SyncBidirectional)
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("Save: %v", err)

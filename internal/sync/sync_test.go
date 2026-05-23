@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/wiki"
 )
 
 // mockReindexer records reindex calls.
@@ -139,8 +140,8 @@ func TestManagerMultiRepo(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Sync.Enabled = true
 	cfg.Sync.Interval = "5s"
-	cfg.Sync.AddMapping("projects/alpha", remote1)
-	cfg.Sync.AddMapping("projects/beta", remote2)
+	cfg.Sync.AddMapping("projects/alpha", remote1, config.SyncBidirectional)
+	cfg.Sync.AddMapping("projects/beta", remote2, config.SyncBidirectional)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	config.Save(cfgPath, cfg)
@@ -196,7 +197,7 @@ func TestRegisterMapping(t *testing.T) {
 	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
 
 	// Register dynamically
-	if err := mgr.RegisterMapping("projects/new", remote); err != nil {
+	if err := mgr.RegisterMapping("projects/new", remote, config.SyncBidirectional); err != nil {
 		t.Fatalf("RegisterMapping: %v", err)
 	}
 
@@ -207,6 +208,38 @@ func TestRegisterMapping(t *testing.T) {
 	}
 	if loaded.Sync.Mappings[0].Prefix != "projects/new" {
 		t.Errorf("prefix = %q", loaded.Sync.Mappings[0].Prefix)
+	}
+	if loaded.Sync.Mappings[0].Direction != config.SyncBidirectional {
+		t.Errorf("direction = %q, want bidirectional", loaded.Sync.Mappings[0].Direction)
+	}
+
+	// Re-registering with a different direction must update in place,
+	// not append a duplicate. This mirrors the "pin direction" workflow
+	// agents would use when switching a project to pull-only.
+	if err := mgr.RegisterMapping("projects/new", remote, config.SyncPull); err != nil {
+		t.Fatalf("RegisterMapping (direction change): %v", err)
+	}
+	loaded, _ = config.Load(cfgPath)
+	if len(loaded.Sync.Mappings) != 1 {
+		t.Fatalf("expected 1 mapping after re-register, got %d", len(loaded.Sync.Mappings))
+	}
+	if loaded.Sync.Mappings[0].Direction != config.SyncPull {
+		t.Errorf("direction after re-register = %q, want pull", loaded.Sync.Mappings[0].Direction)
+	}
+
+	// Empty direction normalizes to bidirectional.
+	if err := mgr.RegisterMapping("projects/another", remote, ""); err != nil {
+		t.Fatalf("RegisterMapping (empty direction): %v", err)
+	}
+	loaded, _ = config.Load(cfgPath)
+	var got config.SyncDirection
+	for _, m := range loaded.Sync.Mappings {
+		if m.Prefix == "projects/another" {
+			got = m.Direction
+		}
+	}
+	if got != config.SyncBidirectional {
+		t.Errorf("empty direction did not normalize to bidirectional, got %q", got)
 	}
 
 	// HasMapping should work
@@ -258,6 +291,218 @@ func TestStartAndStop(t *testing.T) {
 	status := mgr.Status()
 	if !status.Enabled {
 		t.Error("status should show enabled")
+	}
+}
+
+// TestLocalUpdateSurvivesBidirectionalSync exercises the bug where a local
+// write that lands between two sync ticks is clobbered by the next pull
+// because copyToWiki unconditionally overwrites every wiki file with its
+// shadow-clone copy *before* copyFromWiki gets a chance to commit the
+// local change. The local edit must (a) still be on disk after a sync
+// cycle and (b) make it to the remote.
+func TestLocalUpdateSurvivesBidirectionalSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath) // creates index.md with "Welcome"
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h" // don't let the background ticker interfere
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	// After initial sync the seeded page is on disk.
+	indexPath := filepath.Join(wikiDir, "index.md")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("initial sync did not populate wiki: %v", err)
+	}
+
+	// Simulate the user calling update_page: rewrite the local file
+	// with new content. This is exactly what wiki.UpdatePage does.
+	newContent := []byte("# Home\n\nUser made a local edit.\n")
+	if err := os.WriteFile(indexPath, newContent, 0o644); err != nil {
+		t.Fatalf("local update: %v", err)
+	}
+
+	// Next sync tick. The local edit must survive and propagate.
+	mgr.syncAll(context.Background())
+
+	got, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read after sync: %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Errorf("local edit was clobbered by sync:\n  got:  %q\n  want: %q", got, newContent)
+	}
+
+	// And the remote must have received the edit.
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	remoteContent, err := os.ReadFile(filepath.Join(cloneTarget, "index.md"))
+	if err != nil {
+		t.Fatalf("read remote index.md: %v", err)
+	}
+	if string(remoteContent) != string(newContent) {
+		t.Errorf("remote did not receive local edit:\n  got:  %q\n  want: %q", remoteContent, newContent)
+	}
+}
+
+// TestLocalDeleteSurvivesBidirectionalSync covers the matching delete_page
+// scenario: a locally-deleted file must stay deleted and the deletion must
+// propagate to the remote, rather than being undone by copyToWiki.
+func TestLocalDeleteSurvivesBidirectionalSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath)
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h"
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	mgr := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	indexPath := filepath.Join(wikiDir, "index.md")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("initial sync did not populate wiki: %v", err)
+	}
+
+	// Delete locally (what wiki.DeletePage does).
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatalf("local delete: %v", err)
+	}
+
+	mgr.syncAll(context.Background())
+
+	if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+		t.Errorf("local deletion was undone by sync (err=%v)", err)
+	}
+
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(cloneTarget, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("remote did not receive deletion (err=%v)", err)
+	}
+}
+
+// TestWikiUpdateAndDeleteThroughSync drives the same race as the two
+// previous tests, but through the public wiki.Wiki API (UpdatePage,
+// DeletePage) rather than raw os.WriteFile. This is closer to what the
+// user actually reported: agent calls update_page / delete_page, the
+// API returns success, but the next sync tick clobbers the change.
+//
+// The wiki here uses the same reindexer the manager calls, so the
+// indexer state and on-disk state stay in sync the way they do in
+// production.
+func TestWikiUpdateAndDeleteThroughSync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	remotePath := setupBareRemote(t)
+	seedRemote(t, remotePath)
+
+	wikiDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Sync.Enabled = true
+	cfg.Sync.Default = remotePath
+	cfg.Sync.Interval = "1h"
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	config.Save(cfgPath, cfg)
+
+	// First sync without a wiki to populate the wiki dir from the
+	// seeded remote. Then open the wiki on the populated dir so its
+	// index matches the on-disk state.
+	bootstrap := NewManager(wikiDir, cfgPath, cfg, &mockReindexer{})
+	if err := bootstrap.Start(context.Background()); err != nil {
+		t.Fatalf("bootstrap Start: %v", err)
+	}
+	bootstrap.Stop()
+
+	w, err := wiki.Open(wikiDir)
+	if err != nil {
+		t.Fatalf("wiki.Open: %v", err)
+	}
+	defer w.Close()
+
+	// Real reindexer wired to the wiki.
+	mgr := NewManager(wikiDir, cfgPath, cfg, w)
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	ctx := context.Background()
+
+	// --- Update via the wiki API ---
+	newBody := "# Home\n\nUpdated via the wiki API.\n"
+	if err := w.UpdatePage(ctx, "index", newBody); err != nil {
+		t.Fatalf("UpdatePage: %v", err)
+	}
+	mgr.syncAll(ctx)
+
+	got, err := os.ReadFile(filepath.Join(wikiDir, "index.md"))
+	if err != nil {
+		t.Fatalf("read index.md: %v", err)
+	}
+	if string(got) != newBody {
+		t.Errorf("UpdatePage was clobbered by sync:\n  got:  %q\n  want: %q", got, newBody)
+	}
+
+	// The wiki's own index must still reflect the new body too.
+	p, err := w.GetPage(ctx, "index")
+	if err != nil {
+		t.Fatalf("GetPage: %v", err)
+	}
+	if !strings.Contains(p.Body, "Updated via the wiki API") {
+		t.Errorf("index page body does not contain new content: %q", p.Body)
+	}
+
+	// --- Delete via the wiki API ---
+	if err := w.DeletePage(ctx, "index"); err != nil {
+		t.Fatalf("DeletePage: %v", err)
+	}
+	mgr.syncAll(ctx)
+
+	if _, err := os.Stat(filepath.Join(wikiDir, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("DeletePage was undone by sync (err=%v)", err)
+	}
+	if _, err := w.GetPage(ctx, "index"); err == nil {
+		t.Error("wiki still indexes 'index' after delete+sync")
+	}
+
+	// Remote should reflect both operations: index.md is gone.
+	cloneTarget := filepath.Join(t.TempDir(), "verify")
+	if out, err := exec.Command("git", "clone", remotePath, cloneTarget).CombinedOutput(); err != nil {
+		t.Fatalf("clone for verify: %s: %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(cloneTarget, "index.md")); !os.IsNotExist(err) {
+		t.Errorf("remote still has index.md after wiki delete (err=%v)", err)
 	}
 }
 

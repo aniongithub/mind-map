@@ -5,11 +5,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/aniongithub/mind-map/internal/config"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -17,7 +19,7 @@ import (
 // SyncRegistrar allows the MCP server to register sync mappings and
 // check whether a page path has a sync target configured.
 type SyncRegistrar interface {
-	RegisterMapping(prefix, remote string) error
+	RegisterMapping(prefix, remote string, direction config.SyncDirection) error
 	HasMapping(pagePath string) bool
 }
 
@@ -84,7 +86,7 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "move_page",
-		Description: "Rename or relocate a wiki page atomically. Moves the underlying file from one path to another, updates the index, and rewrites the page's outgoing links. Fails if the destination already exists. Use this instead of create_page + delete_page to avoid leaving duplicate pages behind.",
+		Description: "Rename or relocate a wiki page atomically. Moves the underlying file from one path to another, updates the index, and rewrites the page's outgoing links. Fails if the destination already exists, unless overwrite=true. Use this instead of create_page + delete_page to avoid leaving duplicate pages behind. When the destination exists, ask the user whether to overwrite (the destination's content will be lost) before retrying with overwrite=true.",
 	}, s.movePage)
 
 	mcp.AddTool(s.server, &mcp.Tool{
@@ -99,7 +101,7 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "register_sync",
-		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Auth uses the machine's existing git credentials.",
+		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Direction defaults to 'bidirectional' (pull+push); use 'pull' to mirror an upstream repo read-only into the wiki, or 'push' to publish wiki content to a remote without ever pulling from it. Re-registering the same prefix replaces the previous direction. Auth uses the machine's existing git credentials.",
 	}, s.registerSync)
 }
 
@@ -131,11 +133,17 @@ type listInput struct {
 type registerSyncInput struct {
 	Prefix string `json:"prefix" jsonschema:"wiki path prefix to sync, e.g. projects/mind-map"`
 	Remote string `json:"remote" jsonschema:"git remote URL, e.g. https://github.com/user/repo.wiki.git"`
+	// Direction is optional. Omitted or empty means bidirectional.
+	Direction string `json:"direction,omitempty" jsonschema:"sync direction: 'bidirectional' (default), 'pull' (mirror remote read-only into wiki), or 'push' (publish wiki to remote, never pulling)"`
 }
 
 type moveInput struct {
 	From string `json:"from" jsonschema:"current page path without .md extension"`
 	To   string `json:"to" jsonschema:"new page path without .md extension"`
+	// Overwrite is opt-in by design. The default-false behavior matches
+	// the long-standing safety contract: a move never destroys data
+	// unless the caller (after asking the user) explicitly says so.
+	Overwrite bool `json:"overwrite,omitempty" jsonschema:"set true to replace an existing destination page; ask the user for explicit confirmation first since the destination's content will be lost"`
 }
 
 // --- Tool handlers ---
@@ -229,14 +237,33 @@ func (s *Server) deletePage(ctx context.Context, _ *mcp.CallToolRequest, input p
 
 func (s *Server) movePage(ctx context.Context, _ *mcp.CallToolRequest, input moveInput) (*mcp.CallToolResult, any, error) {
 	start := time.Now()
-	if err := s.wiki.MovePage(ctx, input.From, input.To); err != nil {
+	err := s.wiki.MovePage(ctx, input.From, input.To, wiki.MoveOptions{Overwrite: input.Overwrite})
+	if err != nil {
+		// Make the "destination already exists" case actionable for
+		// the agent: a clear hint that overwrite=true (after user
+		// confirmation) is the way forward, rather than a generic
+		// failure that invites a retry loop.
+		if errors.Is(err, wiki.ErrDestinationExists) {
+			slog.Info("tool.move_page rejected: destination exists",
+				slog.String("from", input.From), slog.String("to", input.To))
+			return nil, nil, fmt.Errorf("%w. Ask the user whether to overwrite %q (its content will be lost), then retry with overwrite=true if they agree", err, input.To)
+		}
 		slog.Error("tool.move_page failed", slog.String("from", input.From), slog.String("to", input.To), slog.Any("error", err))
 		return nil, nil, err
 	}
-	slog.Info("tool.move_page", slog.String("from", input.From), slog.String("to", input.To), slog.Duration("elapsed", time.Since(start)))
+	slog.Info("tool.move_page",
+		slog.String("from", input.From),
+		slog.String("to", input.To),
+		slog.Bool("overwrite", input.Overwrite),
+		slog.Duration("elapsed", time.Since(start)),
+	)
+	msg := fmt.Sprintf("Moved page: %s → %s", input.From, input.To)
+	if input.Overwrite {
+		msg += " (overwrote existing destination)"
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: fmt.Sprintf("Moved page: %s → %s", input.From, input.To)},
+			&mcp.TextContent{Text: msg},
 		},
 	}, nil, nil
 }
@@ -289,15 +316,43 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 		return nil, nil, fmt.Errorf("both prefix and remote are required")
 	}
 
-	if err := s.sync.RegisterMapping(input.Prefix, input.Remote); err != nil {
-		slog.Error("tool.register_sync failed", slog.String("prefix", input.Prefix), slog.Any("error", err))
+	// Validate direction up-front so a typo gives the agent a clear
+	// error instead of silently being normalized to bidirectional.
+	direction := config.SyncDirection(input.Direction)
+	if input.Direction != "" && direction.Normalize() != direction {
+		return nil, nil, fmt.Errorf("invalid direction %q: must be one of 'bidirectional', 'pull', 'push' (or omitted for bidirectional)", input.Direction)
+	}
+	if direction == "" {
+		direction = config.SyncBidirectional
+	}
+
+	if err := s.sync.RegisterMapping(input.Prefix, input.Remote, direction); err != nil {
+		slog.Error("tool.register_sync failed",
+			slog.String("prefix", input.Prefix),
+			slog.String("direction", string(direction)),
+			slog.Any("error", err),
+		)
 		return nil, nil, err
 	}
 
-	slog.Info("tool.register_sync", slog.String("prefix", input.Prefix), slog.String("remote", input.Remote))
+	slog.Info("tool.register_sync",
+		slog.String("prefix", input.Prefix),
+		slog.String("remote", input.Remote),
+		slog.String("direction", string(direction)),
+	)
+
+	msg := fmt.Sprintf("Sync registered: pages under '%s' will sync to %s", input.Prefix, input.Remote)
+	switch direction {
+	case config.SyncPull:
+		msg += " (pull-only: changes flow from the remote into the wiki, never back)"
+	case config.SyncPush:
+		msg += " (push-only: changes flow from the wiki to the remote, never back)"
+	default:
+		msg += " (bidirectional)"
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: fmt.Sprintf("Sync registered: pages under '%s' will sync to %s", input.Prefix, input.Remote)},
+			&mcp.TextContent{Text: msg},
 		},
 	}, nil, nil
 }

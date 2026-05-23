@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -206,16 +207,38 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	return w.removePageIndex(ctx, pagePath)
 }
 
+// ErrDestinationExists is returned by MovePage when the destination
+// path is already occupied and the caller did not opt in to overwriting.
+// Callers (and MCP tools / HTTP handlers) match against this with
+// errors.Is so they can offer the user a confirmation prompt before
+// retrying with MoveOptions{Overwrite: true}.
+var ErrDestinationExists = errors.New("destination already exists")
+
+// MoveOptions tunes MovePage behavior. Zero value is the safe default:
+// refuse to overwrite an existing destination.
+type MoveOptions struct {
+	// Overwrite, when true, lets MovePage replace an existing
+	// destination page. The destination's body, frontmatter, and
+	// outgoing links are lost. Backlinks pointing at the destination
+	// (which live in other pages' source markdown) are kept — they
+	// still reflect [[destination]] text those pages contain.
+	Overwrite bool
+}
+
 // MovePage renames a page atomically: it moves the underlying file from
 // fromPath to toPath, refreshes the index, and rewrites the page's
 // outgoing-link rows. Backlinks from other pages are intentionally left
 // untouched — those rows reflect [[wikilink]] text in source markdown that
 // still references the old name.
 //
-// Returns an error if the destination already exists, the source does
-// not exist, or either path is invalid. The two paths must differ after
-// normalization.
-func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string) error {
+// If the destination already exists, MovePage returns ErrDestinationExists
+// unless opts.Overwrite is true. Callers should treat ErrDestinationExists
+// as a recoverable signal: ask the user whether to overwrite, and retry
+// with MoveOptions{Overwrite: true} if they agree.
+//
+// Other failure modes (source missing, invalid paths, same path) are
+// reported with descriptive errors and are not opt-in recoverable.
+func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string, opts MoveOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -256,7 +279,17 @@ func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string) error {
 		return fmt.Errorf("stat source: %w", err)
 	}
 	if _, err := os.Stat(toAbs); err == nil {
-		return fmt.Errorf("destination already exists: %s", to)
+		if !opts.Overwrite {
+			return fmt.Errorf("%w: %s", ErrDestinationExists, to)
+		}
+		// Drop the destination's index entry first. os.Rename will
+		// atomically replace the file on POSIX, so the on-disk state
+		// is fine either way; clearing the index now keeps it from
+		// pointing at the old (about-to-be-replaced) rowid.
+		if err := w.removePageIndex(ctx, to); err != nil {
+			slog.Warn("move(overwrite): remove dest index entry failed",
+				slog.String("to", to), slog.Any("error", err))
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat destination: %w", err)
 	}
@@ -277,7 +310,11 @@ func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string) error {
 		return fmt.Errorf("index new page: %w", err)
 	}
 
-	slog.Info("page moved", slog.String("from", from), slog.String("to", to))
+	slog.Info("page moved",
+		slog.String("from", from),
+		slog.String("to", to),
+		slog.Bool("overwrite", opts.Overwrite),
+	)
 	return nil
 }
 

@@ -103,6 +103,14 @@ move_page(from: "projects/old-name", to: "projects/new-name")
 
 `move_page` is **atomic** — it renames the file on disk, updates the index, and rewrites the page's outgoing-link rows in one step. **Always use `move_page` instead of `create_page` + `delete_page`** to avoid leaving duplicate pages behind. Backlinks from other pages (other pages with `[[old-name]]` in their source) are intentionally not rewritten; if you want those updated, search and edit the source pages explicitly.
 
+If the destination already exists, `move_page` fails with a message containing `destination already exists`. **Ask the user whether to overwrite** — the destination's content will be lost — and only then retry with `overwrite: true`:
+
+```
+move_page(from: "projects/old-name", to: "projects/new-name", overwrite: true)
+```
+
+Never set `overwrite: true` without explicit user confirmation: it is destructive.
+
 ## Listing Pages
 
 ```
@@ -160,7 +168,19 @@ When in doubt, prefer **deeper paths over wider ones**. A page at `projects/foo/
 
 ## Sync (read-only or read-write)
 
-`register_sync` ties a path prefix to a git remote. Sync is bidirectional by default but supports `direction: "pull"` (read-only) and `direction: "push"` (write-only) — useful when the wiki content is owned upstream (e.g. a project's GitHub wiki) and the local wiki is a working copy that should never push back. Respect existing sync mappings: don't reshape paths under a prefix that's syncing somewhere else without confirming with the user first.
+`register_sync` ties a path prefix to a git remote and supports three directions:
+
+```
+register_sync(prefix: "projects/foo", remote: "https://github.com/user/foo.wiki.git")
+register_sync(prefix: "docs/upstream", remote: "https://example.com/upstream.wiki.git", direction: "pull")
+register_sync(prefix: "publish/blog",  remote: "https://example.com/blog.wiki.git",     direction: "push")
+```
+
+- `bidirectional` (default): pull from the remote and push wiki changes back.
+- `pull`: read-only mirror — remote changes flow into the wiki; the wiki never pushes. Use this when the content is owned upstream (e.g. another project's GitHub wiki).
+- `push`: write-only — wiki changes flow to the remote; the remote never overwrites the wiki. Use this for publishing a curated subtree.
+
+Re-registering the same prefix replaces the previous direction. Respect existing sync mappings: don't reshape paths under a prefix that's syncing somewhere else without confirming with the user first.
 
 ## Page Format Example
 
