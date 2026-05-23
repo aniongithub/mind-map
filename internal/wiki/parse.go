@@ -28,49 +28,45 @@ func parsePage(raw []byte) parsedPage {
 	ctx := parser.NewContext()
 	reader := text.NewReader(raw)
 
-	// Parse to extract frontmatter via goldmark-meta
-	doc := md.Parser().Parse(reader, parser.WithContext(ctx))
-	_ = doc // we don't render here, just parse
+	// Parse only to populate the meta context; goldmark-meta stores the
+	// YAML frontmatter map on ctx as a side effect. The AST itself is
+	// unused here — we extract the body via stripFrontmatter below.
+	md.Parser().Parse(reader, parser.WithContext(ctx))
 
 	fm := meta.Get(ctx)
-	body, fmEnd := stripFrontmatter(raw)
-
-	title := extractTitle(fm, body, "")
-
-	links := extractWikilinks(body)
-
-	_ = fmEnd
+	body := stripFrontmatter(raw)
 
 	return parsedPage{
-		title:       title,
+		title:       extractTitle(fm, body),
 		body:        string(body),
 		frontmatter: fm,
-		links:       links,
+		links:       extractWikilinks(body),
 	}
 }
 
-// stripFrontmatter removes the YAML frontmatter block from raw markdown,
-// returning the body and the byte offset where frontmatter ends.
-func stripFrontmatter(raw []byte) ([]byte, int) {
+// stripFrontmatter removes the YAML frontmatter block from raw markdown
+// and returns the body bytes.
+func stripFrontmatter(raw []byte) []byte {
 	s := string(raw)
 	if !strings.HasPrefix(s, "---") {
-		return raw, 0
+		return raw
 	}
 	end := strings.Index(s[3:], "---")
 	if end < 0 {
-		return raw, 0
+		return raw
 	}
 	offset := 3 + end + 3
 	// Skip the trailing newline after closing ---
 	if offset < len(s) && s[offset] == '\n' {
 		offset++
 	}
-	return []byte(s[offset:]), offset
+	return []byte(s[offset:])
 }
 
-// extractTitle gets the title from frontmatter "title" field, or falls back
-// to the first markdown heading, or the filename.
-func extractTitle(fm map[string]interface{}, body []byte, filename string) string {
+// extractTitle returns the title from the frontmatter "title" field, or the
+// first markdown `# heading`, or "" if neither is present. Callers are
+// responsible for any filename fallback.
+func extractTitle(fm map[string]interface{}, body []byte) string {
 	if fm != nil {
 		if t, ok := fm["title"]; ok {
 			if s, ok := t.(string); ok && s != "" {
@@ -87,7 +83,7 @@ func extractTitle(fm map[string]interface{}, body []byte, filename string) strin
 		}
 	}
 
-	return filename
+	return ""
 }
 
 // extractWikilinks finds all [[target]] patterns in markdown text.
