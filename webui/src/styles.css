@@ -923,3 +923,82 @@ mark {
     .row-overflow-btn { opacity: 0.65; }
     .row-overflow-btn[aria-expanded="true"] { opacity: 1; }
 }
+
+/* --- Modal ---
+ *
+ * Centered dialog with a scrim. Same z-index ladder as the popover but
+ * higher, so a confirmation modal opened from a popover item sits on
+ * top correctly (the popover unmounts first, but if it didn't, this
+ * still wins).
+ */
+
+.modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 200;
+}
+
+.modal {
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+    width: 100%;
+    max-width: 480px;
+    max-height: calc(100vh - 32px);
+    display: flex;
+    flex-direction: column;
+    outline: none;
+}
+
+.modal-header {
+    padding: 14px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.modal-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* Variant: destructive confirmation. The primary button uses red. */
+.modal.destructive .btn.primary {
+    background: #c33;
+    border-color: #c33;
+}
+.modal.destructive .btn.primary:hover { background: #a00; border-color: #a00; }
+
+/* Small helper used by the delete-confirm body to list paths. */
+.modal-path-list {
+    margin: 8px 0 0 0;
+    padding: 0 0 0 16px;
+    list-style: disc;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    word-break: break-all;
+}
+.modal-path-list li { margin: 2px 0; }
+.modal-path-list-more {
+    margin-top: 4px;
+    color: var(--fg-dim);
+    font-style: italic;
+}

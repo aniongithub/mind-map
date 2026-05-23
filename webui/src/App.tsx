@@ -3,6 +3,7 @@ import { api, Page } from './api';
 import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
 import { RowAction } from './RowActions';
+import { DeleteConfirm } from './DeleteConfirm';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { marked } from 'marked';
@@ -132,25 +133,19 @@ export function App() {
         }
     };
 
+    // Pages pending a delete-confirmation. Holding the list (not just a
+    // boolean) lets the modal show what's about to be deleted, and it's
+    // the same shape we'll need for bulk-delete from select mode.
+    const [pendingDelete, setPendingDelete] = useState<Page[] | null>(null);
+    const [deleting, setDeleting] = useState(false);
+
     // Handle the per-row ⋯ menu actions. Move and Select are stubbed —
-    // they'll get real modals in follow-up commits. Delete is wired
-    // end-to-end with a confirm() placeholder (which will be replaced
-    // by a proper modal in a later commit).
-    const handleRowAction = async (action: RowAction, page: Page) => {
+    // they'll get real modals in follow-up commits.
+    const handleRowAction = (action: RowAction, page: Page) => {
         switch (action) {
-            case 'delete': {
-                const label = page.title ? `"${page.title}" (${page.path})` : page.path;
-                if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
-                try {
-                    await api.deletePage(page.path);
-                    if (current?.path === page.path) setCurrent(null);
-                    await loadPages();
-                } catch (e) {
-                    console.error('delete failed:', e);
-                    window.alert(`Delete failed: ${e instanceof Error ? e.message : e}`);
-                }
+            case 'delete':
+                setPendingDelete([page]);
                 return;
-            }
             case 'move':
                 // TODO: open Move dialog with filter + folder/page list.
                 console.log('TODO: move', page.path);
@@ -159,6 +154,28 @@ export function App() {
                 // TODO: enter multi-select mode.
                 console.log('TODO: select', page.path);
                 return;
+        }
+    };
+
+    const confirmDelete = async () => {
+        if (!pendingDelete) return;
+        setDeleting(true);
+        try {
+            // Delete sequentially so a partial failure leaves a clear
+            // boundary in the index (and in the log). The set is small
+            // — single page today, "a few" once bulk-delete lands —
+            // so the latency cost is negligible.
+            for (const p of pendingDelete) {
+                await api.deletePage(p.path);
+                if (current?.path === p.path) setCurrent(null);
+            }
+            await loadPages();
+            setPendingDelete(null);
+        } catch (e) {
+            console.error('delete failed:', e);
+            window.alert(`Delete failed: ${e instanceof Error ? e.message : e}`);
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -662,6 +679,13 @@ export function App() {
                     />
                 )}
             </div>
+            <DeleteConfirm
+                open={pendingDelete !== null}
+                pages={pendingDelete ?? []}
+                onCancel={() => setPendingDelete(null)}
+                onConfirm={confirmDelete}
+                busy={deleting}
+            />
         </div>
     );
 }
