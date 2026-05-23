@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
-import { api, Page } from './mcp';
+import { api, Page } from './api';
 import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
 import { GraphView } from './GraphView';

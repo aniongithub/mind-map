@@ -1,4 +1,4 @@
-import { Page } from './mcp';
+import { Page } from './api';
 
 // Tokenize a free-form search query the same way the FTS index does:
 //   - "quoted phrases" become a single token (so they highlight as a

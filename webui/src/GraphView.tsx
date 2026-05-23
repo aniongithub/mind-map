@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import ForceGraph from 'force-graph';
-import { Page, Link, api } from './mcp';
+import { Page, Link, api } from './api';
 import { searchTokens, searchRegex } from './search';
 
 type EdgeKind = 'path' | 'reference';
