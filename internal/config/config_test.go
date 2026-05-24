@@ -172,3 +172,81 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Errorf("loaded mapping prefix = %q", loaded.Sync.Mappings[0].Prefix)
 	}
 }
+
+func TestParseCloudRefresh(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+	}{
+		{"5m", 5 * time.Minute},
+		{"10m", 10 * time.Minute},
+		{"1h", 1 * time.Hour},
+		// Floor: anything < 30s clamps to the default to protect a
+		// busy wiki from CPU churn.
+		{"1s", 5 * time.Minute},
+		{"", 5 * time.Minute},   // empty → default
+		{"junk", 5 * time.Minute}, // invalid → default
+	}
+	for _, tc := range tests {
+		d := DigestConfig{CloudRefresh: tc.input}
+		if got := d.ParseCloudRefresh(); got != tc.want {
+			t.Errorf("ParseCloudRefresh(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestDigestConfig_RoundtripJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := DefaultConfig()
+	cfg.Digest.CloudSize = 75
+	cfg.Digest.RecentsSize = 30
+	cfg.Digest.CloudRefresh = "10m"
+	cfg.Digest.StopwordsExtra = []string{"TODO", "FIXME"}
+	cfg.Digest.MaxRenderBytes = 8192
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Digest.CloudSize != 75 {
+		t.Errorf("CloudSize = %d, want 75", loaded.Digest.CloudSize)
+	}
+	if loaded.Digest.RecentsSize != 30 {
+		t.Errorf("RecentsSize = %d, want 30", loaded.Digest.RecentsSize)
+	}
+	if loaded.Digest.ParseCloudRefresh() != 10*time.Minute {
+		t.Errorf("CloudRefresh = %v, want 10m", loaded.Digest.ParseCloudRefresh())
+	}
+	if len(loaded.Digest.StopwordsExtra) != 2 || loaded.Digest.StopwordsExtra[0] != "TODO" {
+		t.Errorf("StopwordsExtra = %v", loaded.Digest.StopwordsExtra)
+	}
+	if loaded.Digest.MaxRenderBytes != 8192 {
+		t.Errorf("MaxRenderBytes = %d, want 8192", loaded.Digest.MaxRenderBytes)
+	}
+}
+
+func TestDigestConfig_BackwardsCompatible(t *testing.T) {
+	// A config file written before the digest section existed must
+	// still load without errors and yield zero-valued digest fields
+	// (which the consumers treat as "use defaults").
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"sync":{"enabled":false,"interval":"30s"}}`), 0o600); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load legacy config: %v", err)
+	}
+	if loaded.Digest.CloudSize != 0 {
+		t.Errorf("expected zero CloudSize on legacy config, got %d", loaded.Digest.CloudSize)
+	}
+	if loaded.Digest.ParseCloudRefresh() != 5*time.Minute {
+		t.Errorf("expected default 5m on legacy config, got %v", loaded.Digest.ParseCloudRefresh())
+	}
+}

@@ -125,10 +125,23 @@ func (w *Wiki) Digest(ctx context.Context) (*Digest, error) {
 		Recents:   recents,
 		Areas:     areas,
 	}
-	d.Markdown = renderDigestMarkdown(d, defaultMaxRenderBytes)
+	d.Markdown = renderDigestMarkdown(d, w.renderCap())
 
 	w.digest.set(cloudVer, recentsSeq, pageCount, d)
 	return d, nil
+}
+
+// renderCap returns the effective byte cap to pass into the markdown
+// renderer. Normalized in Open() to:
+//
+//	> 0  → trim to that size
+//	== 0 → defaulted, never observed here
+//	< 0  → no trimming
+//
+// The renderer treats <= 0 uniformly as "no trim," so we forward
+// negative values straight through.
+func (w *Wiki) renderCap() int {
+	return w.maxRenderBytes
 }
 
 // pageCount runs the same SELECT COUNT(*) the Context handler uses.

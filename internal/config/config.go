@@ -120,9 +120,55 @@ func (s *SyncConfig) Remotes() []string {
 	return remotes
 }
 
+// DigestConfig holds tunables for the per-conversation orientation
+// digest (cloud rebuild, recents LRU, render cap, stopword extras).
+// All fields are optional; zero or invalid values fall back to the
+// built-in defaults. Documented in detail in mind-map/plans/digest.
+type DigestConfig struct {
+	// CloudSize caps the top-K terms surfaced in the word cloud.
+	// Default 50. Tunable up if your wiki is large enough that 50
+	// terms feels too sparse; down if context budget is tight.
+	CloudSize int `json:"cloud_size,omitempty"`
+
+	// RecentsSize caps the active-use LRU ring. Default 20. Applied
+	// at wiki Open; live changes via /api/settings take effect after
+	// the next server restart.
+	RecentsSize int `json:"recents_size,omitempty"`
+
+	// CloudRefresh controls how often the cloud rebuilds. Default 5m.
+	// Accepts any time.ParseDuration value; values below 30 seconds
+	// are clamped up so a busy wiki doesn't burn CPU.
+	CloudRefresh string `json:"cloud_refresh,omitempty"`
+
+	// StopwordsExtra extends the built-in English stopword list.
+	// Words are case-folded on load. Useful for domain-specific
+	// noise like "TODO" or "FIXME".
+	StopwordsExtra []string `json:"stopwords_extra,omitempty"`
+
+	// MaxRenderBytes caps the rendered markdown blob. Default 4096
+	// (~1K tokens for most LLMs). Trim discipline when over: drop
+	// recents, then cloud, never areas/header/footer.
+	MaxRenderBytes int `json:"max_render_bytes,omitempty"`
+}
+
+// ParseCloudRefresh returns the cloud rebuild interval. Returns the
+// default (5m) if empty or invalid. Floor at 30 seconds — anything
+// faster is wasted CPU for a signal nobody reads that often.
+func (d *DigestConfig) ParseCloudRefresh() time.Duration {
+	if d.CloudRefresh == "" {
+		return 5 * time.Minute
+	}
+	v, err := time.ParseDuration(d.CloudRefresh)
+	if err != nil || v < 30*time.Second {
+		return 5 * time.Minute
+	}
+	return v
+}
+
 // Config holds all runtime settings.
 type Config struct {
-	Sync SyncConfig `json:"sync"`
+	Sync   SyncConfig   `json:"sync"`
+	Digest DigestConfig `json:"digest,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.

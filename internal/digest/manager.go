@@ -48,6 +48,7 @@ type Manager struct {
 	cloudRefresh   time.Duration
 	recentsRefresh time.Duration
 	cloudSize      int
+	stopwordsExtra []string
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -84,6 +85,7 @@ func NewManager(w *wiki.Wiki, opts Options) *Manager {
 		cloudRefresh:   opts.CloudRefresh,
 		recentsRefresh: opts.RecentsRefresh,
 		cloudSize:      opts.CloudSize,
+		stopwordsExtra: opts.StopwordsExtra,
 	}
 }
 
@@ -173,7 +175,7 @@ func (m *Manager) run(ctx context.Context) {
 // transient errors rather than crashing a long-running service.
 func (m *Manager) rebuildCloud(ctx context.Context) {
 	start := time.Now()
-	terms, err := m.w.BuildCloud(ctx, m.cloudSize, nil)
+	terms, err := m.w.BuildCloud(ctx, m.cloudSize, m.stopwordsExtra)
 	if err != nil {
 		slog.Warn("digest cloud rebuild failed", slog.Any("error", err))
 		return

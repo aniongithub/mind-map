@@ -88,7 +88,14 @@ func init() {
 func runStdio(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 
-	w, err := wiki.Open(dir)
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
+		cfg = config.DefaultConfig()
+	}
+
+	w, err := wiki.Open(dir, wiki.WithOptions(wikiOptionsFromConfig(cfg)))
 	if err != nil {
 		return fmt.Errorf("open wiki: %w", err)
 	}
@@ -98,13 +105,38 @@ func runStdio(cmd *cobra.Command, args []string) error {
 	// recents flush) for the duration of the stdio session. Stop
 	// before Close so a mid-rebuild ticker doesn't race the DB
 	// shutdown.
-	dm := digest.NewManager(w, digest.Options{})
+	dm := digest.NewManager(w, digestOptionsFromConfig(cfg))
 	dm.Start(cmd.Context())
 	defer dm.Stop()
 
 	s := mindmcp.NewServer(w, nil, getVersion())
 	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 	return s.MCPServer().Run(cmd.Context(), &mcpsdk.StdioTransport{})
+}
+
+// wikiOptionsFromConfig maps the digest section of config.Config to
+// the construction-time knobs the Wiki cares about (recents capacity,
+// render cap, stopword extras). Zero/missing values keep the Wiki's
+// own defaults — DigestConfig is documented as fully optional.
+func wikiOptionsFromConfig(cfg *config.Config) wiki.Options {
+	d := cfg.Digest
+	return wiki.Options{
+		RecentsSize:    d.RecentsSize,
+		MaxRenderBytes: d.MaxRenderBytes,
+		StopwordsExtra: d.StopwordsExtra,
+	}
+}
+
+// digestOptionsFromConfig maps the digest section to the runtime
+// (ticker / rebuild) knobs the digest.Manager cares about. Same
+// "zero means default" contract.
+func digestOptionsFromConfig(cfg *config.Config) digest.Options {
+	d := cfg.Digest
+	return digest.Options{
+		CloudRefresh:   d.ParseCloudRefresh(),
+		CloudSize:      d.CloudSize,
+		StopwordsExtra: d.StopwordsExtra,
+	}
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -154,7 +186,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 // runHTTPServer wires the HTTP handler from internal/httpapi and serves it.
 // Shared by the interactive `serve` command and the system service.
 func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
-	w, err := wiki.Open(dir)
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
+		cfg = config.DefaultConfig()
+	}
+
+	w, err := wiki.Open(dir, wiki.WithOptions(wikiOptionsFromConfig(cfg)))
 	if err != nil {
 		return fmt.Errorf("open wiki: %w", err)
 	}
@@ -176,16 +215,9 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 			return
 		}
 	}()
-	dm := digest.NewManager(w, digest.Options{})
+	dm := digest.NewManager(w, digestOptionsFromConfig(cfg))
 	dm.Start(dctx)
 	defer dm.Stop()
-
-	cfgPath := config.DefaultPath()
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
-		cfg = config.DefaultConfig()
-	}
 
 	handler := httpapi.New(httpapi.Deps{
 		Wiki:       w,
