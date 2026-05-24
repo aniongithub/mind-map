@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO required)
@@ -65,6 +66,12 @@ type Wiki struct {
 	// digest caches the rendered markdown blob, invalidated by cloud
 	// version + recents seq changes. See digest.go.
 	digest *digestCache
+	// closed guards Close() against double-invocation: testWiki and
+	// other callers commonly stack defer Close on top of t.Cleanup.
+	// Without this guard, the second Close() runs persistRecents
+	// against an already-closed DB and logs a spurious warning.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
@@ -117,15 +124,35 @@ func Open(root string) (*Wiki, error) {
 		return nil, fmt.Errorf("initial index: %w", err)
 	}
 
+	// Load persisted derived state (recents LRU, word cloud) after
+	// reindex so any stale entries pointing at pages that vanished
+	// while the server was off get filtered against the fresh index.
+	// Failures are logged but non-fatal — a corrupt state row just
+	// degrades to "fresh-wiki" behavior, not a crash.
+	w.loadState(context.Background())
+
 	slog.Info("wiki opened", slog.String("root", absRoot))
 	return w, nil
 }
 
 // Close releases page locks held by this session and closes the database.
+// Idempotent — safe to call multiple times (e.g. when a test stacks
+// defer Close on top of testWiki's t.Cleanup).
 func (w *Wiki) Close() error {
-	slog.Info("wiki closing", slog.String("root", w.root))
-	w.db.Exec("DELETE FROM page_locks WHERE holder = ?", w.sessionID)
-	return w.db.Close()
+	w.closeOnce.Do(func() {
+		slog.Info("wiki closing", slog.String("root", w.root))
+		// Flush the LRU one last time so a clean shutdown doesn't
+		// lose the last ~30 seconds of touches between ticker fires.
+		// Errors are logged, not propagated — we'd rather close
+		// cleanly with a slightly stale snapshot than leak the DB
+		// handle.
+		if err := w.persistRecents(context.Background()); err != nil {
+			slog.Warn("recents flush on close failed", slog.Any("error", err))
+		}
+		w.db.Exec("DELETE FROM page_locks WHERE holder = ?", w.sessionID)
+		w.closeErr = w.db.Close()
+	})
+	return w.closeErr
 }
 
 // Root returns the wiki's root directory.
@@ -183,6 +210,10 @@ func (w *Wiki) initSchema() error {
 	`
 	if _, err := w.db.Exec(schema); err != nil {
 		return err
+	}
+
+	if err := w.initStateSchema(); err != nil {
+		return fmt.Errorf("wiki_state schema: %w", err)
 	}
 
 	// Clean up stale locks (older than 5 minutes) from crashed processes
