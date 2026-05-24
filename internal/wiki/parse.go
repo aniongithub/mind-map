@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	meta "github.com/yuin/goldmark-meta"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
@@ -21,17 +22,24 @@ type parsedPage struct {
 	body        string
 	frontmatter map[string]interface{}
 	links       []string
+	// images holds standard markdown image destinations (`![](path)`)
+	// in document order, deduplicated. These are tracked in the links
+	// table with kind='image' so lifecycle operations (delete/move/GC)
+	// can run as plain index queries.
+	images []string
 }
 
-// parsePage extracts frontmatter, title, body text, and wikilinks from raw markdown.
+// parsePage extracts frontmatter, title, body text, wikilinks, and image
+// references from raw markdown.
 func parsePage(raw []byte) parsedPage {
 	ctx := parser.NewContext()
 	reader := text.NewReader(raw)
 
-	// Parse only to populate the meta context; goldmark-meta stores the
-	// YAML frontmatter map on ctx as a side effect. The AST itself is
-	// unused here — we extract the body via stripFrontmatter below.
-	md.Parser().Parse(reader, parser.WithContext(ctx))
+	// Parse fully now: we use the AST to extract image destinations
+	// (standard markdown ![](path)). Wikilinks are still string-scanned
+	// from the post-frontmatter body since they're a non-standard
+	// extension and goldmark doesn't recognize them.
+	doc := md.Parser().Parse(reader, parser.WithContext(ctx))
 
 	fm := meta.Get(ctx)
 	body := stripFrontmatter(raw)
@@ -41,6 +49,7 @@ func parsePage(raw []byte) parsedPage {
 		body:        string(body),
 		frontmatter: fm,
 		links:       extractWikilinks(body),
+		images:      extractImages(doc, raw),
 	}
 }
 
@@ -115,4 +124,68 @@ func extractWikilinks(body []byte) []string {
 	}
 
 	return links
+}
+
+// extractImages walks the markdown AST and returns the destinations of
+// every `![](path)` image in document order, deduplicated. External URLs
+// (anything with a scheme) are skipped — we only track wiki-local
+// references because those are the ones the lifecycle code needs to
+// reason about. Anchor-only refs (`#foo`) and empty destinations are
+// also skipped.
+//
+// The `raw` parameter is the full file bytes (including frontmatter);
+// goldmark uses byte offsets into this when reporting node positions,
+// but ast.Image carries its destination directly so we don't need to
+// re-slice the source.
+func extractImages(doc ast.Node, _ []byte) []string {
+	seen := make(map[string]bool)
+	var images []string
+
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		img, ok := n.(*ast.Image)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		dest := string(img.Destination)
+		if !isWikiLocalRef(dest) {
+			return ast.WalkContinue, nil
+		}
+		if !seen[dest] {
+			seen[dest] = true
+			images = append(images, dest)
+		}
+		return ast.WalkContinue, nil
+	})
+
+	return images
+}
+
+// isWikiLocalRef reports whether a markdown image destination points at a
+// wiki-local asset rather than an external resource. External resources
+// (http://, https://, data:, mailto:, etc.) are intentionally ignored —
+// the lifecycle code only manages files inside the wiki tree.
+func isWikiLocalRef(dest string) bool {
+	if dest == "" {
+		return false
+	}
+	if strings.HasPrefix(dest, "#") {
+		return false
+	}
+	// Reject anything with a URL scheme (RFC 3986 scheme is
+	// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) followed by ":").
+	// A bare check for "://" misses `data:` and `mailto:`, hence the
+	// stricter scan: first colon before any slash means scheme.
+	for i := 0; i < len(dest); i++ {
+		c := dest[i]
+		if c == ':' {
+			return false
+		}
+		if c == '/' || c == '?' || c == '#' {
+			break
+		}
+	}
+	return true
 }

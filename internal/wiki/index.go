@@ -132,7 +132,13 @@ func (w *Wiki) Reindex(ctx context.Context) (ReindexStats, error) {
 			return ReindexStats{}, err
 		}
 		for _, target := range parsed.links {
-			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target, kind) VALUES (?, ?, 'link')", pagePath, target); err != nil {
+				tx.Rollback()
+				return ReindexStats{}, err
+			}
+		}
+		for _, target := range parsed.images {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target, kind) VALUES (?, ?, 'image')", pagePath, target); err != nil {
 				tx.Rollback()
 				return ReindexStats{}, err
 			}
@@ -232,7 +238,12 @@ func (w *Wiki) indexPage(ctx context.Context, pagePath string) error {
 		return err
 	}
 	for _, target := range parsed.links {
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target, kind) VALUES (?, ?, 'link')", pagePath, target); err != nil {
+			return err
+		}
+	}
+	for _, target := range parsed.images {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target, kind) VALUES (?, ?, 'image')", pagePath, target); err != nil {
 			return err
 		}
 	}

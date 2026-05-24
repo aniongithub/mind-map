@@ -398,14 +398,16 @@ type Link struct {
 	Target string `json:"target"`
 }
 
-// AllLinks returns every wikilink edge in the index. Used by the graph
-// view to render reference edges without a per-page round-trip.
+// AllLinks returns every wikilink edge in the index. Image references
+// (kind='image') are excluded — those have a separate query path for the
+// asset lifecycle code. Used by the graph view to render reference edges
+// without a per-page round-trip.
 func (w *Wiki) AllLinks(ctx context.Context) ([]Link, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	rows, err := w.db.QueryContext(ctx, "SELECT source, target FROM links")
+	rows, err := w.db.QueryContext(ctx, "SELECT source, target FROM links WHERE kind = 'link'")
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +503,7 @@ func (w *Wiki) releaseLock(pagePath string) {
 // --- internal helpers ---
 
 func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) {
-	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ?", pagePath)
+	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ? AND kind = 'link'", pagePath)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +520,7 @@ func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) 
 }
 
 func (w *Wiki) getBacklinks(ctx context.Context, pagePath string) ([]string, error) {
-	rows, err := w.db.QueryContext(ctx, "SELECT source FROM links WHERE target = ?", pagePath)
+	rows, err := w.db.QueryContext(ctx, "SELECT source FROM links WHERE target = ? AND kind = 'link'", pagePath)
 	if err != nil {
 		return nil, err
 	}
