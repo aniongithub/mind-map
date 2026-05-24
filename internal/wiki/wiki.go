@@ -44,11 +44,40 @@ type SearchResult struct {
 	Snippet string `json:"snippet"`
 }
 
-// WikiContext provides an overview of the wiki for orientation.
+// WikiContext provides an overview of the wiki for orientation. The
+// legacy fields (PageCount, RecentPages, TopLevelDirs) reflect disk
+// state — recent_pages is sorted by file mtime, top_level_dirs is read
+// from the filesystem — and remain available for clients that already
+// depend on that shape (opencode, Claude Code in the wild, per the
+// plan's open question #4).
+//
+// The newer fields (Cloud, Recents, Areas, Markdown) are the digest
+// signals: cloud terms across all page bodies, the active-use LRU
+// (intent, not mtime), per-area page counts pulled from the index,
+// and the rendered markdown an LLM can use directly. New clients
+// should prefer `get_wiki_digest` for these, but `get_wiki_context`
+// returns them too so existing tool wiring still benefits from the
+// orientation upgrade without a client change.
 type WikiContext struct {
 	PageCount    int      `json:"page_count"`
 	RecentPages  []Page   `json:"recent_pages"`
 	TopLevelDirs []string `json:"top_level_dirs"`
+
+	// Cloud is the top-K word/phrase cloud across all page bodies.
+	// Empty until the first ticker fires on a freshly-opened wiki.
+	Cloud []CloudTerm `json:"cloud_terms,omitempty"`
+	// Recents is the active-use LRU — paths the user/agent actually
+	// touched (Create/Update/Get/Move/GetBacklinks). Distinct from
+	// RecentPages which is mtime-based.
+	Recents []string `json:"recents,omitempty"`
+	// Areas is the per-top-level-directory page count + index title.
+	// Driven by the indexed `pages` table, not filesystem listing.
+	Areas []AreaSummary `json:"areas,omitempty"`
+	// Markdown is the rendered digest blob — the same string an LLM
+	// would consume from `get_wiki_digest`. Included here so the
+	// existing get_wiki_context call gives clients an upgrade path
+	// without a tool-name change.
+	Markdown string `json:"markdown,omitempty"`
 }
 
 // Wiki is the core engine. Create one with Open().

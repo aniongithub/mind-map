@@ -358,3 +358,50 @@ func TestReindexDetectsDirectFilesystemChanges(t *testing.T) {
 		t.Errorf("page still not indexed after reindex (got %d body=%s)", rec.Code, rec.Body.String())
 	}
 }
+
+func TestGetDigest(t *testing.T) {
+	h := newTestServer(t)
+
+	// Seed a page so the digest has something to summarize.
+	rec := doJSON(t, h, "POST", "/api/pages", map[string]string{
+		"path":    "topics/sqlite",
+		"content": "# SQLite\n\nSQLite is a fast embedded database.\n",
+	})
+	if rec.Code != 201 {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSON(t, h, "GET", "/api/digest", nil)
+	if rec.Code != 200 {
+		t.Fatalf("digest: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var d wiki.Digest
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, rec.Body.String())
+	}
+
+	if d.PageCount < 1 {
+		t.Errorf("page count = %d, want >= 1", d.PageCount)
+	}
+	if d.Markdown == "" {
+		t.Errorf("markdown empty")
+	}
+	if !strings.Contains(d.Markdown, "This wiki contains") {
+		t.Errorf("markdown missing header sentence:\n%s", d.Markdown)
+	}
+	if len(d.Areas) == 0 {
+		t.Errorf("expected at least one area, got none")
+	}
+	// Recently active should include the page we just created
+	// (CreatePage touches the LRU).
+	found := false
+	for _, p := range d.Recents {
+		if p == "topics/sqlite" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("recents missing topics/sqlite: %v", d.Recents)
+	}
+}
