@@ -28,6 +28,11 @@ type Server struct {
 	wiki   *wiki.Wiki
 	sync   SyncRegistrar
 	server *mcp.Server
+	// forceImagesOff, when true, makes get_page / search_pages behave
+	// as if include_images and include_image_metadata are both false
+	// regardless of caller request. Set by operators for token-
+	// constrained deployments via SetForceImagesOff.
+	forceImagesOff bool
 }
 
 // NewServer creates an MCP server backed by the given wiki.
@@ -66,8 +71,8 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "get_page",
-		Description: "Read a wiki page with parsed frontmatter, body, outgoing links, and backlinks.",
-	}, s.getPage)
+		Description: "Read a wiki page with parsed frontmatter, body, outgoing links, and backlinks. Optional flags include_images (returns referenced images as MCP image content for vision agents) and include_image_metadata (returns {path,size,mime} per image without bytes). Both default off to keep token cost predictable.",
+	}, s.getPageWithFlags)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "create_page",
@@ -108,6 +113,16 @@ func (s *Server) registerTools() {
 		Name:        "reindex_wiki",
 		Description: "Force a full reindex pass over the wiki's on-disk markdown files. Use when you've edited files outside the wiki API and want the index (search, page list, backlinks) to reflect disk state without restarting the server. The pass is incremental — unchanged files are skipped via mtime — so it's cheap to call. Returns stats: total/added/updated/removed/unchanged/elapsed_ms.",
 	}, s.reindexWiki)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "upload_image",
+		Description: "Upload an image to a page's sidecar directory and return its markdown-ready path. The agent then embeds the reference (e.g. ![alt](returned/path)) via update_page or edit_page. Image bytes must be base64-encoded; supported formats track what browsers render natively (PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, ICO). Collisions auto-suffix.",
+	}, s.uploadImage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "download_image",
+		Description: "Read an image asset and return it as MCP ImageContent so vision-capable agents can see it directly. Path is the wiki-relative asset path as it appears in markdown references.",
+	}, s.downloadImage)
 }
 
 // --- Tool input types ---
@@ -175,16 +190,8 @@ func (s *Server) getWikiContext(ctx context.Context, _ *mcp.CallToolRequest, _ a
 	return textResult(wctx)
 }
 
-func (s *Server) getPage(ctx context.Context, _ *mcp.CallToolRequest, input pagePathInput) (*mcp.CallToolResult, any, error) {
-	start := time.Now()
-	page, err := s.wiki.GetPage(ctx, input.Path)
-	if err != nil {
-		slog.Warn("tool.get_page failed", slog.String("page", input.Path), slog.Any("error", err))
-		return nil, nil, err
-	}
-	slog.Info("tool.get_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
-	return textResult(page)
-}
+// (get_page is implemented in images.go as getPageWithFlags so the
+// image-related flags live next to the rest of the image tooling.)
 
 func (s *Server) createPage(ctx context.Context, _ *mcp.CallToolRequest, input createInput) (*mcp.CallToolResult, any, error) {
 	start := time.Now()

@@ -619,6 +619,24 @@ func (w *Wiki) imageRefsFor(ctx context.Context, pagePath string) ([]string, err
 	return images, nil
 }
 
+// ImageRefsForPage is the exported variant of imageRefsFor used by
+// MCP / HTTP handlers that need to enumerate a page's image
+// references. The page path is normalized first (same rules as
+// GetPage); an empty result is returned for an unknown page rather
+// than an error, since "no images referenced" and "page doesn't
+// exist" are both legitimate empty cases the caller will usually
+// treat the same way.
+func (w *Wiki) ImageRefsForPage(ctx context.Context, pagePath string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizePagePath(pagePath)
+	if err != nil {
+		return nil, err
+	}
+	return w.imageRefsFor(ctx, normalized)
+}
+
 func (w *Wiki) topLevelDirs() []string {
 	entries, err := os.ReadDir(w.root)
 	if err != nil {
