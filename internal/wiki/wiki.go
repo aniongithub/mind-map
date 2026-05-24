@@ -52,9 +52,13 @@ type WikiContext struct {
 
 // Wiki is the core engine. Create one with Open().
 type Wiki struct {
-	root      string   // absolute path to wiki directory
-	db        *sql.DB  // SQLite database with FTS5
-	sessionID string   // unique ID for this process, used for page locks
+	root      string  // absolute path to wiki directory
+	db        *sql.DB // SQLite database with FTS5
+	sessionID string  // unique ID for this process, used for page locks
+	// recents tracks pages the user/agent has actively touched. See
+	// recents.go for the rationale (intent vs. disk mtime). Persistence
+	// to SQLite is layered on in state.go; here it just lives in memory.
+	recents *recentsLRU
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
@@ -79,7 +83,15 @@ func Open(root string) (*Wiki, error) {
 	}
 
 	sessionID := fmt.Sprintf("pid-%d-%d", os.Getpid(), time.Now().UnixNano())
-	w := &Wiki{root: absRoot, db: db, sessionID: sessionID}
+	w := &Wiki{
+		root:      absRoot,
+		db:        db,
+		sessionID: sessionID,
+		// Capacity 20 matches the plan default. Step 4 will swap this
+		// for a config-driven value (digest.recents_size); the default
+		// keeps existing callers unaffected.
+		recents: newRecentsLRU(20),
+	}
 	if err := w.initSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
