@@ -64,6 +64,11 @@ type syncTarget struct {
 	cloneDir  string
 	prefixes  []string // wiki prefixes that map to this remote
 	direction config.SyncDirection
+	// lfs and lfsPatterns mirror the SyncMapping fields. When lfs is
+	// true the target ensures git-lfs is initialized in the shadow
+	// clone and writes .gitattributes routing lfsPatterns through it.
+	lfs         bool
+	lfsPatterns []string
 
 	mu        sync.Mutex
 	lastSync  time.Time
@@ -155,12 +160,38 @@ func (m *Manager) Interval() time.Duration {
 // RegisterMapping adds a prefix-to-remote mapping with the given
 // direction, saves config, and sets up the sync target. An empty
 // direction normalizes to bidirectional. Returns immediately; sync
-// happens on the next cycle.
+// happens on the next cycle. LFS is left at its existing value for
+// the prefix (false by default for new mappings).
 func (m *Manager) RegisterMapping(prefix, remote string, direction config.SyncDirection) error {
+	return m.RegisterMappingWithOptions(prefix, remote, MappingOptions{Direction: direction})
+}
+
+// MappingOptions bundles the optional knobs accepted by
+// RegisterMappingWithOptions. Embedding all of them in a struct keeps
+// the call site readable when more options accrete in the future.
+type MappingOptions struct {
+	// Direction is the sync direction. Empty value normalizes to
+	// SyncBidirectional.
+	Direction config.SyncDirection
+	// LFS, when true, routes binary assets through git-lfs in the
+	// shadow clone. Requires git-lfs on the host.
+	LFS bool
+	// LFSPatterns is the list of .gitattributes patterns to track
+	// via LFS. Nil + LFS=true uses config.DefaultLFSPatterns. Empty
+	// (non-nil) slice is "track nothing" — usable only as a stub
+	// for later configuration.
+	LFSPatterns []string
+}
+
+// RegisterMappingWithOptions is the full form of RegisterMapping that
+// accepts the LFS knobs. The original RegisterMapping calls into this
+// with no LFS to preserve back-compat with callers that only care
+// about direction.
+func (m *Manager) RegisterMappingWithOptions(prefix, remote string, opts MappingOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.cfg.Sync.AddMapping(prefix, remote, direction)
+	m.cfg.Sync.AddMappingWithLFS(prefix, remote, opts.Direction, opts.LFS, opts.LFSPatterns)
 	if err := config.Save(m.cfgPath, m.cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -169,9 +200,23 @@ func (m *Manager) RegisterMapping(prefix, remote string, direction config.SyncDi
 	slog.Info("sync mapping registered",
 		slog.String("prefix", prefix),
 		slog.String("remote", remote),
-		slog.String("direction", string(direction.Normalize())),
+		slog.String("direction", string(opts.Direction.Normalize())),
+		slog.Bool("lfs", opts.LFS),
 	)
 	return nil
+}
+
+// RegisterMappingWithLFS is a flat-argument variant of
+// RegisterMappingWithOptions that satisfies the mcp package's
+// SyncRegistrarWithLFS interface. Keeping the argument shape flat
+// (rather than passing a struct) lets the mcp package depend only on
+// stdlib types — no cross-package struct sharing.
+func (m *Manager) RegisterMappingWithLFS(prefix, remote string, direction config.SyncDirection, lfs bool, lfsPatterns []string) error {
+	return m.RegisterMappingWithOptions(prefix, remote, MappingOptions{
+		Direction:   direction,
+		LFS:         lfs,
+		LFSPatterns: lfsPatterns,
+	})
 }
 
 // HasMapping returns true if the given page path has a sync mapping
@@ -212,20 +257,23 @@ func (m *Manager) rebuildTargets() {
 
 // rebuildTargetsLocked rebuilds targets. Caller must hold m.mu.
 func (m *Manager) rebuildTargetsLocked() {
-	// Build remote -> (prefixes, direction) map. Default field is treated
-	// as a bidirectional mapping at the empty prefix.
+	// Build remote -> (prefixes, direction, lfs) map. Default field is
+	// treated as a bidirectional mapping at the empty prefix with LFS
+	// disabled (the default that works on every git provider).
 	type remoteInfo struct {
-		prefixes  []string
-		direction config.SyncDirection
+		prefixes    []string
+		direction   config.SyncDirection
+		lfs         bool
+		lfsPatterns []string
 	}
 	remotes := make(map[string]*remoteInfo)
-	add := func(remote, prefix string, dir config.SyncDirection) {
+	add := func(remote, prefix string, dir config.SyncDirection, lfs bool, patterns []string) {
 		if remote == "" {
 			return
 		}
 		ri, ok := remotes[remote]
 		if !ok {
-			ri = &remoteInfo{direction: dir}
+			ri = &remoteInfo{direction: dir, lfs: lfs, lfsPatterns: patterns}
 			remotes[remote] = ri
 		}
 		ri.prefixes = append(ri.prefixes, prefix)
@@ -238,12 +286,25 @@ func (m *Manager) rebuildTargetsLocked() {
 				slog.String("kept", string(ri.direction)),
 				slog.String("ignored", string(dir)))
 		}
+		// LFS is a per-remote property in git terms (the .gitattributes
+		// file lives at the root of the clone). If any mapping for a
+		// remote enables LFS we honor it, but we warn if mappings
+		// disagree about patterns — the operator should reconcile.
+		if lfs && !ri.lfs {
+			ri.lfs = true
+			ri.lfsPatterns = patterns
+		} else if lfs && len(patterns) > 0 && !sameStringSlice(ri.lfsPatterns, patterns) {
+			slog.Warn("conflicting LFS patterns for remote, using first",
+				slog.String("remote", remote),
+				slog.Any("kept", ri.lfsPatterns),
+				slog.Any("ignored", patterns))
+		}
 	}
 	if m.cfg.Sync.Default != "" {
-		add(m.cfg.Sync.Default, "", config.SyncBidirectional)
+		add(m.cfg.Sync.Default, "", config.SyncBidirectional, false, nil)
 	}
 	for _, mapping := range m.cfg.Sync.Mappings {
-		add(mapping.Remote, mapping.Prefix, mapping.Direction.Normalize())
+		add(mapping.Remote, mapping.Prefix, mapping.Direction.Normalize(), mapping.LFS, mapping.LFSPatterns)
 	}
 
 	// Create or update targets
@@ -251,13 +312,17 @@ func (m *Manager) rebuildTargetsLocked() {
 		if t, exists := m.targets[remote]; exists {
 			t.prefixes = ri.prefixes
 			t.direction = ri.direction
+			t.lfs = ri.lfs
+			t.lfsPatterns = ri.lfsPatterns
 		} else {
 			dirName := sanitizeDirName(remote)
 			m.targets[remote] = &syncTarget{
-				remote:    remote,
-				cloneDir:  filepath.Join(m.syncDir, dirName),
-				prefixes:  ri.prefixes,
-				direction: ri.direction,
+				remote:      remote,
+				cloneDir:    filepath.Join(m.syncDir, dirName),
+				prefixes:    ri.prefixes,
+				direction:   ri.direction,
+				lfs:         ri.lfs,
+				lfsPatterns: ri.lfsPatterns,
 			}
 		}
 	}
@@ -268,6 +333,20 @@ func (m *Manager) rebuildTargetsLocked() {
 			delete(m.targets, remote)
 		}
 	}
+}
+
+// sameStringSlice reports whether two []string contain the same
+// elements in the same order. Used by the LFS pattern conflict check.
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // syncAll syncs all targets.
@@ -326,6 +405,18 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	if err := m.ensureClone(ctx, t); err != nil {
 		t.setError(fmt.Sprintf("clone: %v", err))
 		return
+	}
+
+	// LFS bootstrap (no-op when t.lfs is false). Runs on every cycle
+	// so a re-registration that flipped LFS on takes effect on the
+	// next tick without a manual restart. Failures here are surfaced
+	// as setError + return — pushing un-tracked binaries through
+	// git-lfs would just rewrite history later anyway.
+	if t.lfs {
+		if err := ensureLFSConfig(ctx, t); err != nil {
+			t.setError(fmt.Sprintf("lfs setup: %v", err))
+			return
+		}
 	}
 
 	// Phase 1: stage local wiki state in the clone and commit it before
@@ -442,6 +533,12 @@ func (m *Manager) ensureClone(ctx context.Context, t *syncTarget) error {
 // with prefix "projects/alpha" maps the root of the shadow clone into
 // wikiRoot/projects/alpha. An empty prefix mirrors the whole clone
 // to the wiki root. This matches copyFromWiki (the reverse direction).
+//
+// Files carried: markdown pages (*.md) and the contents of *.assets/
+// sidecar directories. Anything else is treated as not-our-concern
+// and skipped — keeps random scratch files in the wiki tree from
+// leaking to the remote, while still ferrying the asset bytes the
+// image-support feature needs.
 func (m *Manager) copyToWiki(t *syncTarget) {
 	for _, prefix := range t.prefixes {
 		dstRoot := filepath.Join(m.wikiRoot, prefix)
@@ -458,10 +555,13 @@ func (m *Manager) copyToWiki(t *syncTarget) {
 				}
 				return nil
 			}
-			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+			if d.IsDir() {
 				return nil
 			}
 			rel, _ := filepath.Rel(t.cloneDir, path)
+			if !syncableRel(rel) {
+				return nil
+			}
 			dst := filepath.Join(dstRoot, rel)
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -482,6 +582,10 @@ func (m *Manager) copyToWiki(t *syncTarget) {
 // Skips writes for identical files so git doesn't observe spurious
 // "modified" entries on otherwise-clean trees, and removes clone-side
 // files that no longer exist in the wiki so deletions propagate.
+//
+// Carries the same file set as copyToWiki: *.md pages plus the contents
+// of *.assets/ sidecar directories. Other files in the wiki tree are
+// ignored.
 func (m *Manager) copyFromWiki(t *syncTarget) {
 	for _, prefix := range t.prefixes {
 		srcRoot := filepath.Join(m.wikiRoot, prefix)
@@ -500,10 +604,13 @@ func (m *Manager) copyFromWiki(t *syncTarget) {
 				}
 				return nil
 			}
-			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+			if d.IsDir() {
 				return nil
 			}
 			rel, _ := filepath.Rel(srcRoot, path)
+			if !syncableRel(rel) {
+				return nil
+			}
 			dst := filepath.Join(t.cloneDir, rel)
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -517,8 +624,11 @@ func (m *Manager) copyFromWiki(t *syncTarget) {
 			return nil
 		})
 
-		// Mirror deletes: any .md in the clone that no longer exists in
-		// the wiki must be removed so `git add -A` notices the deletion.
+		// Mirror deletes: any syncable file in the clone that no longer
+		// exists in the wiki must be removed so `git add -A` notices the
+		// deletion. Same predicate as the copy pass to keep the two
+		// directions symmetric — we'd never delete a file we wouldn't
+		// have copied in the first place.
 		filepath.WalkDir(t.cloneDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -530,10 +640,13 @@ func (m *Manager) copyFromWiki(t *syncTarget) {
 				}
 				return nil
 			}
-			if d.IsDir() || !strings.HasSuffix(name, ".md") {
+			if d.IsDir() {
 				return nil
 			}
 			rel, _ := filepath.Rel(t.cloneDir, path)
+			if !syncableRel(rel) {
+				return nil
+			}
 			src := filepath.Join(srcRoot, rel)
 			if _, err := os.Stat(src); os.IsNotExist(err) {
 				os.Remove(path)
@@ -541,6 +654,34 @@ func (m *Manager) copyFromWiki(t *syncTarget) {
 			return nil
 		})
 	}
+}
+
+// syncableRel reports whether a wiki-relative path participates in
+// sync. Currently:
+//
+//   - markdown pages (*.md)
+//   - files inside per-page sidecar directories (any *.assets/ segment)
+//
+// New file kinds get added here as the wiki grows. Keep this in sync
+// with the wiki package's storage layout — anything stored on disk
+// that should travel with the wiki to a remote needs a clause here.
+func syncableRel(rel string) bool {
+	if rel == "" {
+		return false
+	}
+	if strings.HasSuffix(rel, ".md") {
+		return true
+	}
+	// "<page>.assets/<file>" anywhere in the path. We split on slash
+	// rather than checking strings.Contains so we don't accidentally
+	// accept a filename that happens to embed ".assets/" as a
+	// substring.
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasSuffix(seg, ".assets") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers ---
@@ -586,6 +727,55 @@ func ensureGitignore(dir string) {
 		return
 	}
 	os.WriteFile(path, []byte(".mind-map.db\n.mind-map.db-wal\n.mind-map.db-shm\n"), 0o644)
+}
+
+// ensureLFSConfig initializes git-lfs in the shadow clone and writes a
+// .gitattributes file routing the target's LFS patterns through LFS.
+// Idempotent: re-running on a clone where LFS is already configured
+// only refreshes .gitattributes if its content changed.
+//
+// Failure modes:
+//   - git-lfs not installed → "git lfs install" fails with a clear
+//     error; we surface it so the operator can install the binary
+//     before retrying. The mapping itself stays registered.
+//   - remote rejects LFS pointers on push (e.g. GitHub wikis) →
+//     reported during the push phase, not here. We can't detect
+//     this in advance without a probe push.
+func ensureLFSConfig(ctx context.Context, t *syncTarget) error {
+	patterns := t.lfsPatterns
+	if len(patterns) == 0 {
+		// Safety: if someone sets lfs=true with no patterns, fall back
+		// to the default browser-image set so we at least track the
+		// formats the image-support feature produces.
+		patterns = config.DefaultLFSPatterns()
+	}
+
+	if err := gitCmd(ctx, t.cloneDir, "lfs", "install", "--local"); err != nil {
+		return fmt.Errorf("git lfs install: %w (is git-lfs installed?)", err)
+	}
+
+	var b strings.Builder
+	b.WriteString("# Managed by mind-map sync (LFS=true). Do not edit by hand;\n")
+	b.WriteString("# changes will be overwritten on the next sync tick.\n")
+	for _, p := range patterns {
+		fmt.Fprintf(&b, "%s filter=lfs diff=lfs merge=lfs -text\n", p)
+	}
+	want := b.String()
+
+	attrPath := filepath.Join(t.cloneDir, ".gitattributes")
+	if existing, err := os.ReadFile(attrPath); err == nil && string(existing) == want {
+		return nil
+	}
+	if err := os.WriteFile(attrPath, []byte(want), 0o644); err != nil {
+		return fmt.Errorf("write .gitattributes: %w", err)
+	}
+	// Stage immediately so the next commit picks it up. The
+	// "commit if there are staged changes" gate in syncTarget will
+	// produce the actual commit.
+	if err := gitCmd(ctx, t.cloneDir, "add", ".gitattributes"); err != nil {
+		return fmt.Errorf("git add .gitattributes: %w", err)
+	}
+	return nil
 }
 
 // sanitizeDirName converts a remote URL to a safe directory name.

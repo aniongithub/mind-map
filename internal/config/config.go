@@ -41,6 +41,30 @@ type SyncMapping struct {
 	Prefix    string        `json:"prefix"`
 	Remote    string        `json:"remote"`
 	Direction SyncDirection `json:"direction,omitempty"`
+	// LFS, when true, configures the synced shadow clone to track
+	// the patterns in LFSPatterns via git-lfs. Useful when binary
+	// assets (uploaded via the image-support tools) would otherwise
+	// balloon the git repo. Requires git-lfs on the host. Defaults
+	// off because GitHub wikis don't support LFS — flip it on only
+	// for plain repos / providers that do.
+	LFS bool `json:"lfs,omitempty"`
+	// LFSPatterns is the list of .gitattributes patterns to route
+	// through LFS. If empty when LFS is true, a sensible default
+	// (the browser-renderable image extensions plus .pdf) is used
+	// — see DefaultLFSPatterns.
+	LFSPatterns []string `json:"lfs_patterns,omitempty"`
+}
+
+// DefaultLFSPatterns returns the default set of file patterns to route
+// through LFS when a sync mapping enables LFS but doesn't override the
+// patterns explicitly. Tracks the browser-renderable image set used by
+// the upload tools, plus common companion formats agents are likely to
+// reach for next.
+func DefaultLFSPatterns() []string {
+	return []string{
+		"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
+		"*.avif", "*.svg", "*.bmp", "*.ico",
+	}
 }
 
 // SyncConfig holds git sync settings.
@@ -90,7 +114,8 @@ func (s *SyncConfig) ResolveRemote(pagePath string) string {
 // If a mapping for prefix already exists, its remote and direction are
 // both replaced — this is treated as a re-registration, not an additive
 // op, so an existing mapping switching from bidirectional to pull-only
-// (or vice versa) propagates cleanly.
+// (or vice versa) propagates cleanly. LFS settings on an existing
+// mapping are preserved; use AddMappingWithLFS to update them.
 func (s *SyncConfig) AddMapping(prefix, remote string, direction SyncDirection) {
 	direction = direction.Normalize()
 	for i, m := range s.Mappings {
@@ -101,6 +126,34 @@ func (s *SyncConfig) AddMapping(prefix, remote string, direction SyncDirection) 
 		}
 	}
 	s.Mappings = append(s.Mappings, SyncMapping{Prefix: prefix, Remote: remote, Direction: direction})
+}
+
+// AddMappingWithLFS is like AddMapping but also sets the LFS flag and
+// (optionally) the LFS patterns. Patterns default to DefaultLFSPatterns
+// when LFS is true and patterns is nil. Pass an empty (non-nil) slice
+// to explicitly track nothing — that's a usable no-op state for an
+// operator who wants to flip LFS on later.
+func (s *SyncConfig) AddMappingWithLFS(prefix, remote string, direction SyncDirection, lfs bool, patterns []string) {
+	direction = direction.Normalize()
+	if lfs && patterns == nil {
+		patterns = DefaultLFSPatterns()
+	}
+	for i, m := range s.Mappings {
+		if m.Prefix == prefix {
+			s.Mappings[i].Remote = remote
+			s.Mappings[i].Direction = direction
+			s.Mappings[i].LFS = lfs
+			s.Mappings[i].LFSPatterns = patterns
+			return
+		}
+	}
+	s.Mappings = append(s.Mappings, SyncMapping{
+		Prefix:      prefix,
+		Remote:      remote,
+		Direction:   direction,
+		LFS:         lfs,
+		LFSPatterns: patterns,
+	})
 }
 
 // Remotes returns all unique remotes (default + mappings).
