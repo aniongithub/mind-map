@@ -255,6 +255,10 @@ type cloudCache struct {
 	// distinguish "no cloud yet" (cold start) from "cloud is empty"
 	// (truly empty wiki) by checking set.
 	set bool
+	// version is bumped on each Set. The digest cache uses it as a
+	// change signal so it can invalidate rendered output without
+	// re-comparing slices.
+	version uint64
 }
 
 func (c *cloudCache) Set(terms []CloudTerm) {
@@ -265,6 +269,7 @@ func (c *cloudCache) Set(terms []CloudTerm) {
 	copy(cp, terms)
 	c.terms = cp
 	c.set = true
+	c.version++
 }
 
 // Get returns a copy of the current cloud and whether one has been
@@ -278,4 +283,12 @@ func (c *cloudCache) Get() ([]CloudTerm, bool) {
 	cp := make([]CloudTerm, len(c.terms))
 	copy(cp, c.terms)
 	return cp, true
+}
+
+// Version returns the monotonic change counter. Pairs with
+// recentsLRU.version() for digest cache invalidation.
+func (c *cloudCache) Version() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.version
 }

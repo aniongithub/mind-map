@@ -159,6 +159,13 @@ func (w *Wiki) Reindex(ctx context.Context) (ReindexStats, error) {
 				slog.Warn("reindex remove error", slog.String("page", pagePath), slog.Any("error", err))
 				continue
 			}
+			// Keep the recents LRU consistent with `pages`: a page
+			// that vanishes via raw-filesystem delete + reindex
+			// (common after `git pull` in sync) must drop from the
+			// LRU here, since DeletePage() was never called. Without
+			// this hook the digest's "recently active" can point at
+			// a 404.
+			w.recents.remove(pagePath)
 			removed++
 		}
 	}

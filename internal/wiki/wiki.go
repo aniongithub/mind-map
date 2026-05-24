@@ -59,6 +59,12 @@ type Wiki struct {
 	// recents.go for the rationale (intent vs. disk mtime). Persistence
 	// to SQLite is layered on in state.go; here it just lives in memory.
 	recents *recentsLRU
+	// cloud holds the most recent word/phrase cloud rebuild. Populated
+	// by the 5-minute ticker (Step 6); cold start renders without it.
+	cloud *cloudCache
+	// digest caches the rendered markdown blob, invalidated by cloud
+	// version + recents seq changes. See digest.go.
+	digest *digestCache
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
@@ -91,6 +97,8 @@ func Open(root string) (*Wiki, error) {
 		// for a config-driven value (digest.recents_size); the default
 		// keeps existing callers unaffected.
 		recents: newRecentsLRU(20),
+		cloud:   &cloudCache{},
+		digest:  &digestCache{},
 	}
 	if err := w.initSchema(); err != nil {
 		db.Close()

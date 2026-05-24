@@ -29,6 +29,12 @@ type recentsLRU struct {
 	// dirty is true when the in-memory state has diverged from the last
 	// persisted snapshot. The persistence ticker reads + clears it.
 	dirty bool
+	// seq is a monotonic counter bumped on every state-changing
+	// operation (touch / remove / rename / load). The digest cache
+	// uses it as a cheap "did anything change?" signal so it can
+	// invalidate rendered output without re-comparing snapshots.
+	// Wraps at uint64 max — irrelevant in practice.
+	seq uint64
 }
 
 // newRecentsLRU constructs an empty LRU with the given capacity.
@@ -60,6 +66,7 @@ func (r *recentsLRU) touch(path string) {
 	if elem, ok := r.idx[path]; ok {
 		r.ll.MoveToFront(elem)
 		r.dirty = true
+		r.seq++
 		return
 	}
 	elem := r.ll.PushFront(path)
@@ -72,6 +79,7 @@ func (r *recentsLRU) touch(path string) {
 		}
 	}
 	r.dirty = true
+	r.seq++
 }
 
 // remove drops a path from the ring. Called when a page is deleted;
@@ -91,6 +99,7 @@ func (r *recentsLRU) remove(path string) {
 	r.ll.Remove(elem)
 	delete(r.idx, path)
 	r.dirty = true
+	r.seq++
 }
 
 // rename relabels an entry in place, preserving its position in the
@@ -138,6 +147,7 @@ func (r *recentsLRU) rename(from, to string) {
 		}
 	}
 	r.dirty = true
+	r.seq++
 }
 
 // snapshot returns the tracked paths, most recent first. The returned
@@ -177,6 +187,18 @@ func (r *recentsLRU) load(paths []string) {
 		}
 	}
 	r.dirty = false
+	r.seq++
+}
+
+// version returns the monotonic change counter. The digest cache uses
+// this as an invalidation signal: cache the rendered output keyed by
+// (cloudVersion, recentsVersion), and rebuild when either advances.
+//
+// Cheap (one lock + load) so callers can invoke it on every read.
+func (r *recentsLRU) version() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seq
 }
 
 // takeDirty returns whether the ring has unsaved changes and clears
