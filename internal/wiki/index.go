@@ -11,13 +11,32 @@ import (
 	"time"
 )
 
+// ReindexStats summarizes what a Reindex pass did. All counts are
+// across the entire wiki tree on disk; `Total` is the number of
+// markdown files found, not the number of changed pages.
+type ReindexStats struct {
+	Total     int           `json:"total"`
+	Added     int           `json:"added"`
+	Updated   int           `json:"updated"`
+	Removed   int           `json:"removed"`
+	Unchanged int           `json:"unchanged"`
+	Elapsed   time.Duration `json:"-"`
+	// ElapsedMs mirrors Elapsed in a JSON-friendly form so the HTTP
+	// endpoint and MCP tool can return it directly.
+	ElapsedMs int64 `json:"elapsed_ms"`
+}
+
 // Reindex performs an incremental sync of the filesystem with the index.
 // It only re-indexes pages whose mtime has changed, adds new pages, and
 // removes index entries for deleted files. The lock is held per-page
 // rather than for the entire operation, so the server stays responsive.
-func (w *Wiki) Reindex(ctx context.Context) error {
+//
+// Returns ReindexStats summarizing the pass so callers can surface the
+// result (HTTP endpoint, MCP tool, settings UI). The stats are also
+// logged at INFO regardless of caller, matching the prior behavior.
+func (w *Wiki) Reindex(ctx context.Context) (ReindexStats, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return ReindexStats{}, err
 	}
 
 	start := time.Now()
@@ -26,7 +45,7 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 	indexed := make(map[string]string) // path -> modified (RFC3339)
 	rows, err := w.db.QueryContext(ctx, "SELECT path, modified FROM pages")
 	if err != nil {
-		return err
+		return ReindexStats{}, err
 	}
 	for rows.Next() {
 		var path, modified string
@@ -66,14 +85,14 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return ReindexStats{}, err
 	}
 
 	// Phase 3: index new/changed pages
 	var added, updated, removed int
 	for pagePath, info := range diskPages {
 		if err := ctx.Err(); err != nil {
-			return err
+			return ReindexStats{}, err
 		}
 
 		diskMtime := info.ModTime().UTC().Format(time.RFC3339Nano)
@@ -96,7 +115,7 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 
 		tx, err := w.db.BeginTx(ctx, nil)
 		if err != nil {
-			return err
+			return ReindexStats{}, err
 		}
 
 		_, err = tx.ExecContext(ctx,
@@ -105,22 +124,22 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		)
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("index %s: %w", pagePath, err)
+			return ReindexStats{}, fmt.Errorf("index %s: %w", pagePath, err)
 		}
 
 		if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE source = ?", pagePath); err != nil {
 			tx.Rollback()
-			return err
+			return ReindexStats{}, err
 		}
 		for _, target := range parsed.links {
 			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO links (source, target) VALUES (?, ?)", pagePath, target); err != nil {
 				tx.Rollback()
-				return err
+				return ReindexStats{}, err
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			return err
+			return ReindexStats{}, err
 		}
 
 		if _, exists := indexed[pagePath]; exists {
@@ -133,7 +152,7 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 	// Phase 4: remove index entries for deleted files
 	for pagePath := range indexed {
 		if err := ctx.Err(); err != nil {
-			return err
+			return ReindexStats{}, err
 		}
 		if _, onDisk := diskPages[pagePath]; !onDisk {
 			if err := w.removePageIndex(ctx, pagePath); err != nil {
@@ -144,15 +163,26 @@ func (w *Wiki) Reindex(ctx context.Context) error {
 		}
 	}
 
+	elapsed := time.Since(start)
+	stats := ReindexStats{
+		Total:     len(diskPages),
+		Added:     added,
+		Updated:   updated,
+		Removed:   removed,
+		Unchanged: len(diskPages) - added - updated,
+		Elapsed:   elapsed,
+		ElapsedMs: elapsed.Milliseconds(),
+	}
+
 	slog.Info("reindex complete",
-		slog.Int("total", len(diskPages)),
-		slog.Int("added", added),
-		slog.Int("updated", updated),
-		slog.Int("removed", removed),
-		slog.Int("unchanged", len(diskPages)-added-updated),
-		slog.Duration("elapsed", time.Since(start)),
+		slog.Int("total", stats.Total),
+		slog.Int("added", stats.Added),
+		slog.Int("updated", stats.Updated),
+		slog.Int("removed", stats.Removed),
+		slog.Int("unchanged", stats.Unchanged),
+		slog.Duration("elapsed", stats.Elapsed),
 	)
-	return nil
+	return stats, nil
 }
 
 // indexPage indexes a single page (after write/update).

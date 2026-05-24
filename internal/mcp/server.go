@@ -103,6 +103,11 @@ func (s *Server) registerTools() {
 		Name:        "register_sync",
 		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Direction defaults to 'bidirectional' (pull+push); use 'pull' to mirror an upstream repo read-only into the wiki, or 'push' to publish wiki content to a remote without ever pulling from it. Re-registering the same prefix replaces the previous direction. Auth uses the machine's existing git credentials.",
 	}, s.registerSync)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "reindex_wiki",
+		Description: "Force a full reindex pass over the wiki's on-disk markdown files. Use when you've edited files outside the wiki API and want the index (search, page list, backlinks) to reflect disk state without restarting the server. The pass is incremental — unchanged files are skipped via mtime — so it's cheap to call. Returns stats: total/added/updated/removed/unchanged/elapsed_ms.",
+	}, s.reindexWiki)
 }
 
 // --- Tool input types ---
@@ -366,4 +371,22 @@ func topPrefix(path string) string {
 		return ""
 	}
 	return parts[0] + "/" + parts[1]
+}
+
+func (s *Server) reindexWiki(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	stats, err := s.wiki.Reindex(ctx)
+	if err != nil {
+		slog.Error("tool.reindex_wiki failed", slog.Any("error", err))
+		return nil, nil, err
+	}
+	slog.Info("tool.reindex_wiki",
+		slog.Int("total", stats.Total),
+		slog.Int("added", stats.Added),
+		slog.Int("updated", stats.Updated),
+		slog.Int("removed", stats.Removed),
+		slog.Int("unchanged", stats.Unchanged),
+		slog.Duration("elapsed", time.Since(start)),
+	)
+	return textResult(stats)
 }

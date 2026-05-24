@@ -527,3 +527,26 @@ func TestRegisterSyncRejectsInvalidDirection(t *testing.T) {
 		t.Errorf("registrar was called despite invalid direction: %+v", reg.calls)
 	}
 }
+
+func TestReindexWiki(t *testing.T) {
+	session := setupTestServer(t)
+
+	// reindex_wiki returns the stats JSON as text content.
+	text := callTool(t, session, "reindex_wiki", nil)
+	var stats map[string]any
+	if err := json.Unmarshal([]byte(text), &stats); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	// setupTestServer seeds 4 pages. After Open()'s startup reindex
+	// they're already indexed, so a fresh reindex should report
+	// total=4 unchanged=4 added=0.
+	if total, _ := stats["total"].(float64); int(total) != 4 {
+		t.Errorf("total = %v, want 4", stats["total"])
+	}
+	if unchanged, _ := stats["unchanged"].(float64); int(unchanged) != 4 {
+		t.Errorf("unchanged = %v, want 4", stats["unchanged"])
+	}
+	if _, ok := stats["elapsed_ms"]; !ok {
+		t.Errorf("response missing elapsed_ms: %+v", stats)
+	}
+}

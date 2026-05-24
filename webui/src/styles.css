@@ -787,3 +787,33 @@ mark {
     .page-body, .editor-container { padding: 16px 20px 20px; }
     .backlinks { padding: 16px 20px; }
 }
+
+/* --- Settings: Reindex section --- */
+
+.settings-field-help {
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.settings-reindex-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.settings-reindex-status {
+    font-size: 12px;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+}
+
+.settings-reindex-error {
+    font-size: 12.5px;
+    color: #c33;
+}
+@media (prefers-color-scheme: dark) {
+    .settings-reindex-error { color: #ff8080; }
+}

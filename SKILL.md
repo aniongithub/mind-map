@@ -12,6 +12,7 @@ tools:
   - list_pages
   - get_backlinks
   - register_sync
+  - reindex_wiki
 ---
 
 # Mind-Map Skill
@@ -181,6 +182,20 @@ register_sync(prefix: "publish/blog",  remote: "https://example.com/blog.wiki.gi
 - `push`: write-only — wiki changes flow to the remote; the remote never overwrites the wiki. Use this for publishing a curated subtree.
 
 Re-registering the same prefix replaces the previous direction. Respect existing sync mappings: don't reshape paths under a prefix that's syncing somewhere else without confirming with the user first.
+
+## Forcing a Reindex
+
+```
+reindex_wiki()
+→ returns { total, added, updated, removed, unchanged, elapsed_ms }
+```
+
+The wiki index updates automatically on every create/update/delete/move and on every sync pull. You shouldn't normally need `reindex_wiki`. Use it only when:
+
+- You (or the user) edited markdown files **directly on disk** outside the wiki API, and a follow-up `list_pages` or `search_pages` doesn't reflect the change.
+- You suspect the index has drifted from disk (rare; usually a sign of a bug worth reporting).
+
+The pass is incremental — unchanged files are skipped via mtime — so it's cheap to call. Prefer `update_page` / `create_page` / `delete_page` for your own edits; those keep the index synchronous without a reindex.
 
 ## Page Format Example
 
