@@ -84,12 +84,13 @@ The web UI is a static Preact app served by `mind-map serve` over HTTP. It uses 
 
 Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wiki` by default). Multiple stdio processes can safely share the same wiki via SQLite page locking.
 
-## MCP Tools (10 total)
+## MCP Tools (11 total)
 
 | Tool | Description |
 |------|-------------|
 | `search_pages` | Full-text search across page titles and content (SQLite FTS5) |
-| `get_wiki_context` | Wiki overview: page count, top-level directories, recent pages |
+| `get_wiki_digest` | Per-conversation orientation: page count, word/phrase cloud, active-use recents LRU, per-area counts, ~4 KB rendered markdown. Call this at the start of every new conversation. |
+| `get_wiki_context` | Wiki overview: page count, top-level directories, recent pages (mtime-sorted). Also returns the digest fields for new clients. |
 | `get_page` | Read a page with parsed frontmatter, body, outgoing links, and backlinks |
 | `create_page` | Create a new page (markdown with optional YAML frontmatter) |
 | `update_page` | Update an existing page's content |
@@ -102,6 +103,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 
 ## Wiki Features
 
+- **Per-conversation digest**: a compact orientation blob (cloud of top terms, recents LRU, area counts, rendered markdown) for LLMs to consume at conversation start. Always-current; background job rebuilds every 5 minutes; persisted to SQLite across restarts.
 - **YAML frontmatter**: structured metadata on every page (`title`, `type`, `status`, custom fields)
 - **Wikilinks**: `[[target]]` and `[[display|target]]` syntax, resolved to clickable links
 - **Backlink index**: every page knows what links to it

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO required)
@@ -43,23 +44,130 @@ type SearchResult struct {
 	Snippet string `json:"snippet"`
 }
 
-// WikiContext provides an overview of the wiki for orientation.
+// WikiContext provides an overview of the wiki for orientation. The
+// legacy fields (PageCount, RecentPages, TopLevelDirs) reflect disk
+// state — recent_pages is sorted by file mtime, top_level_dirs is read
+// from the filesystem — and remain available for clients that already
+// depend on that shape (opencode, Claude Code in the wild, per the
+// plan's open question #4).
+//
+// The newer fields (Cloud, Recents, Areas, Markdown) are the digest
+// signals: cloud terms across all page bodies, the active-use LRU
+// (intent, not mtime), per-area page counts pulled from the index,
+// and the rendered markdown an LLM can use directly. New clients
+// should prefer `get_wiki_digest` for these, but `get_wiki_context`
+// returns them too so existing tool wiring still benefits from the
+// orientation upgrade without a client change.
 type WikiContext struct {
 	PageCount    int      `json:"page_count"`
 	RecentPages  []Page   `json:"recent_pages"`
 	TopLevelDirs []string `json:"top_level_dirs"`
+
+	// Cloud is the top-K word/phrase cloud across all page bodies.
+	// Empty until the first ticker fires on a freshly-opened wiki.
+	Cloud []CloudTerm `json:"cloud_terms,omitempty"`
+	// Recents is the active-use LRU — paths the user/agent actually
+	// touched (Create/Update/Get/Move/GetBacklinks). Distinct from
+	// RecentPages which is mtime-based.
+	Recents []string `json:"recents,omitempty"`
+	// Areas is the per-top-level-directory page count + index title.
+	// Driven by the indexed `pages` table, not filesystem listing.
+	Areas []AreaSummary `json:"areas,omitempty"`
+	// Markdown is the rendered digest blob — the same string an LLM
+	// would consume from `get_wiki_digest`. Included here so the
+	// existing get_wiki_context call gives clients an upgrade path
+	// without a tool-name change.
+	Markdown string `json:"markdown,omitempty"`
+}
+
+// Options tunes Wiki construction. All fields are optional; the zero
+// value gives the built-in defaults (recents capacity 20, render cap
+// 4 KB, no extra stopwords). Pass with WithOptions to Open():
+//
+//	w, err := wiki.Open(dir, wiki.WithOptions(wiki.Options{
+//	    RecentsSize:    50,
+//	    MaxRenderBytes: 8192,
+//	}))
+//
+// Options is value-passed; mutating it after Open has no effect.
+type Options struct {
+	// RecentsSize is the active-use LRU capacity. Default 20.
+	RecentsSize int
+	// MaxRenderBytes caps the rendered digest markdown. Default 4096.
+	MaxRenderBytes int
+	// StopwordsExtra is forwarded to the cloud builder when invoked
+	// directly via BuildCloud. The digest.Manager passes its own
+	// copy through Options on its Manager; this field is here so
+	// non-Manager callers (tests, ad-hoc tools) get the same set.
+	StopwordsExtra []string
+}
+
+// OpenOption configures wiki.Open. Use WithOptions or future targeted
+// helpers; the variadic form keeps Open(dir) source-compatible.
+type OpenOption func(*Options)
+
+// WithOptions sets the entire Options struct in one call. The most
+// common embedder path: read config, build Options, pass to Open.
+func WithOptions(opts Options) OpenOption {
+	return func(o *Options) { *o = opts }
 }
 
 // Wiki is the core engine. Create one with Open().
 type Wiki struct {
-	root      string   // absolute path to wiki directory
-	db        *sql.DB  // SQLite database with FTS5
-	sessionID string   // unique ID for this process, used for page locks
+	root      string  // absolute path to wiki directory
+	db        *sql.DB // SQLite database with FTS5
+	sessionID string  // unique ID for this process, used for page locks
+	// recents tracks pages the user/agent has actively touched. See
+	// recents.go for the rationale (intent vs. disk mtime). Persistence
+	// to SQLite is layered on in state.go; here it just lives in memory.
+	recents *recentsLRU
+	// cloud holds the most recent word/phrase cloud rebuild. Populated
+	// by the 5-minute ticker (Step 6); cold start renders without it.
+	cloud *cloudCache
+	// digest caches the rendered markdown blob, invalidated by cloud
+	// version + recents seq changes. See digest.go.
+	digest *digestCache
+	// maxRenderBytes is the soft cap applied by Digest(); 0 means no
+	// trim (used by tests).
+	maxRenderBytes int
+	// stopwordsExtra is forwarded to buildCloud when called directly
+	// without an explicit extras list.
+	stopwordsExtra []string
+	// closed guards Close() against double-invocation: testWiki and
+	// other callers commonly stack defer Close on top of t.Cleanup.
+	// Without this guard, the second Close() runs persistRecents
+	// against an already-closed DB and logs a spurious warning.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
 // It initializes the SQLite index and performs an initial scan.
-func Open(root string) (*Wiki, error) {
+// Pass OpenOption values (typically a single WithOptions) to tune the
+// digest signals; the default options match the digest plan's
+// recommended values (LRU=20, render cap=4096, no extra stopwords).
+func Open(root string, opts ...OpenOption) (*Wiki, error) {
+	o := Options{
+		RecentsSize:    20,
+		MaxRenderBytes: defaultMaxRenderBytes,
+	}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	if o.RecentsSize <= 0 {
+		o.RecentsSize = 20
+	}
+	// MaxRenderBytes semantics:
+	//   > 0  → trim to that many bytes
+	//   == 0 → fall back to default (4096) — most likely an
+	//          uninitialized Options struct
+	//   < 0  → no trimming (tests / power users)
+	// The field is normalized to those three states here so digest
+	// rendering can just check the sign without re-deriving intent.
+	if o.MaxRenderBytes == 0 {
+		o.MaxRenderBytes = defaultMaxRenderBytes
+	}
+
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve wiki root: %w", err)
@@ -79,7 +187,16 @@ func Open(root string) (*Wiki, error) {
 	}
 
 	sessionID := fmt.Sprintf("pid-%d-%d", os.Getpid(), time.Now().UnixNano())
-	w := &Wiki{root: absRoot, db: db, sessionID: sessionID}
+	w := &Wiki{
+		root:           absRoot,
+		db:             db,
+		sessionID:      sessionID,
+		recents:        newRecentsLRU(o.RecentsSize),
+		cloud:          &cloudCache{},
+		digest:         &digestCache{},
+		maxRenderBytes: o.MaxRenderBytes,
+		stopwordsExtra: o.StopwordsExtra,
+	}
 	if err := w.initSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -97,15 +214,35 @@ func Open(root string) (*Wiki, error) {
 		return nil, fmt.Errorf("initial index: %w", err)
 	}
 
+	// Load persisted derived state (recents LRU, word cloud) after
+	// reindex so any stale entries pointing at pages that vanished
+	// while the server was off get filtered against the fresh index.
+	// Failures are logged but non-fatal — a corrupt state row just
+	// degrades to "fresh-wiki" behavior, not a crash.
+	w.loadState(context.Background())
+
 	slog.Info("wiki opened", slog.String("root", absRoot))
 	return w, nil
 }
 
 // Close releases page locks held by this session and closes the database.
+// Idempotent — safe to call multiple times (e.g. when a test stacks
+// defer Close on top of testWiki's t.Cleanup).
 func (w *Wiki) Close() error {
-	slog.Info("wiki closing", slog.String("root", w.root))
-	w.db.Exec("DELETE FROM page_locks WHERE holder = ?", w.sessionID)
-	return w.db.Close()
+	w.closeOnce.Do(func() {
+		slog.Info("wiki closing", slog.String("root", w.root))
+		// Flush the LRU one last time so a clean shutdown doesn't
+		// lose the last ~30 seconds of touches between ticker fires.
+		// Errors are logged, not propagated — we'd rather close
+		// cleanly with a slightly stale snapshot than leak the DB
+		// handle.
+		if err := w.persistRecents(context.Background()); err != nil {
+			slog.Warn("recents flush on close failed", slog.Any("error", err))
+		}
+		w.db.Exec("DELETE FROM page_locks WHERE holder = ?", w.sessionID)
+		w.closeErr = w.db.Close()
+	})
+	return w.closeErr
 }
 
 // Root returns the wiki's root directory.
@@ -163,6 +300,10 @@ func (w *Wiki) initSchema() error {
 	`
 	if _, err := w.db.Exec(schema); err != nil {
 		return err
+	}
+
+	if err := w.initStateSchema(); err != nil {
+		return fmt.Errorf("wiki_state schema: %w", err)
 	}
 
 	// Clean up stale locks (older than 5 minutes) from crashed processes

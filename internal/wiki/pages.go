@@ -50,6 +50,11 @@ func (w *Wiki) GetPage(ctx context.Context, pagePath string) (*Page, error) {
 		slog.Warn("failed to get backlinks", slog.String("page", pagePath), slog.Any("error", err))
 	}
 
+	// LRU touch reflects that the agent actually saw this page. We
+	// only reach here on a successful row scan, so a typo'd path that
+	// hit the "page not found" branch above will not pollute recents.
+	w.recents.touch(pagePath)
+
 	return &Page{
 		Path:        pagePath,
 		Title:       title,
@@ -148,7 +153,11 @@ func (w *Wiki) CreatePage(ctx context.Context, pagePath string, content string) 
 	}
 
 	slog.Info("page created", slog.String("page", pagePath))
-	return w.indexPage(ctx, pagePath)
+	if err := w.indexPage(ctx, pagePath); err != nil {
+		return err
+	}
+	w.recents.touch(pagePath)
+	return nil
 }
 
 // UpdatePage replaces the content of an existing page.
@@ -178,7 +187,11 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 	}
 
 	slog.Info("page updated", slog.String("page", pagePath))
-	return w.indexPage(ctx, pagePath)
+	if err := w.indexPage(ctx, pagePath); err != nil {
+		return err
+	}
+	w.recents.touch(pagePath)
+	return nil
 }
 
 // DeletePage removes a page from the filesystem and index.
@@ -204,7 +217,13 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	}
 
 	slog.Info("page deleted", slog.String("page", pagePath))
-	return w.removePageIndex(ctx, pagePath)
+	if err := w.removePageIndex(ctx, pagePath); err != nil {
+		return err
+	}
+	// The page is gone; leaving it in recents would point the agent
+	// at a 404. Drop the entry rather than promote it.
+	w.recents.remove(pagePath)
+	return nil
 }
 
 // ErrDestinationExists is returned by MovePage when the destination
@@ -310,6 +329,10 @@ func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string, opts MoveO
 		return fmt.Errorf("index new page: %w", err)
 	}
 
+	// Treat a move as one continuous "active use" rather than dropping
+	// the old name and freshly inserting the new one. See recentsLRU.rename.
+	w.recents.rename(from, to)
+
 	slog.Info("page moved",
 		slog.String("from", from),
 		slog.String("to", to),
@@ -359,7 +382,14 @@ func (w *Wiki) GetBacklinks(ctx context.Context, pagePath string) ([]string, err
 		return nil, err
 	}
 
-	return w.getBacklinks(ctx, pagePath)
+	backlinks, err := w.getBacklinks(ctx, pagePath)
+	if err != nil {
+		return nil, err
+	}
+	// GetBacklinks is "I'm looking at this page's incoming links" —
+	// an active use of the target page, even if its body wasn't read.
+	w.recents.touch(pagePath)
+	return backlinks, nil
 }
 
 // Link is a single source→target edge between two pages.
@@ -393,7 +423,13 @@ func (w *Wiki) AllLinks(ctx context.Context) ([]Link, error) {
 	return links, nil
 }
 
-// Context returns a WikiContext overview.
+// Context returns a WikiContext overview. The legacy fields
+// (PageCount, RecentPages, TopLevelDirs) come from disk — recent_pages
+// is mtime-sorted, top_level_dirs is read from the filesystem — and
+// preserve the shape clients in the wild already depend on. The new
+// fields (Cloud, Recents, Areas, Markdown) come from the digest so
+// existing get_wiki_context callers get the orientation upgrade
+// without switching tool names.
 func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -430,11 +466,25 @@ func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	// Top-level dirs
 	dirs := w.topLevelDirs()
 
-	return &WikiContext{
+	wctx := &WikiContext{
 		PageCount:    count,
 		RecentPages:  recent,
 		TopLevelDirs: dirs,
-	}, nil
+	}
+
+	// Layer the digest's signals on top. A failure here doesn't fail
+	// the whole Context() call — the legacy fields are still valuable
+	// on their own, and the digest is an enhancement, not a contract.
+	if d, err := w.Digest(ctx); err == nil {
+		wctx.Cloud = d.Cloud
+		wctx.Recents = d.Recents
+		wctx.Areas = d.Areas
+		wctx.Markdown = d.Markdown
+	} else {
+		slog.Warn("context digest enrichment failed", slog.Any("error", err))
+	}
+
+	return wctx, nil
 }
 
 // --- locking ---

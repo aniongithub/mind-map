@@ -176,6 +176,7 @@ func TestListTools(t *testing.T) {
 	expected := map[string]bool{
 		"search_pages":    false,
 		"get_wiki_context": false,
+		"get_wiki_digest": false,
 		"get_page":        false,
 		"create_page":     false,
 		"update_page":     false,
@@ -206,6 +207,40 @@ func TestGetWikiContext(t *testing.T) {
 	}
 	if ctx.PageCount != 4 {
 		t.Errorf("PageCount = %d, want 4", ctx.PageCount)
+	}
+	// New digest fields should be populated on the same response so
+	// existing get_wiki_context callers get the orientation upgrade
+	// for free (plan open question #4 — keep old shape, add fields).
+	if ctx.Markdown == "" {
+		t.Errorf("expected digest markdown to be populated on get_wiki_context")
+	}
+	if len(ctx.Areas) == 0 {
+		t.Errorf("expected areas to be populated on get_wiki_context")
+	}
+}
+
+func TestGetWikiDigest(t *testing.T) {
+	session := setupTestServer(t)
+	text := callTool(t, session, "get_wiki_digest", nil)
+
+	var d wiki.Digest
+	if err := json.Unmarshal([]byte(text), &d); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, text)
+	}
+	if d.PageCount != 4 {
+		t.Errorf("PageCount = %d, want 4", d.PageCount)
+	}
+	if d.Markdown == "" {
+		t.Errorf("Markdown empty")
+	}
+	if !strings.Contains(d.Markdown, "This wiki contains") {
+		t.Errorf("markdown missing header sentence:\n%s", d.Markdown)
+	}
+	if !strings.Contains(d.Markdown, "## Areas") {
+		t.Errorf("markdown missing Areas section:\n%s", d.Markdown)
+	}
+	if len(d.Areas) == 0 {
+		t.Errorf("expected at least one area in structured output")
 	}
 }
 

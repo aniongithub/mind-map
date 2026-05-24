@@ -4,6 +4,7 @@ description: A wiki for AI agents and humans -- search, read, and write markdown
 tools:
   - search_pages
   - get_wiki_context
+  - get_wiki_digest
   - get_page
   - create_page
   - update_page
@@ -47,11 +48,28 @@ Use mind-map as your **persistent memory**:
 
 ## Getting Oriented
 
-**Always start by understanding what's already in the wiki:**
+**Always start a new conversation with the digest:**
+```
+get_wiki_digest()
+→ returns a compact markdown blob: page count, top word/phrase cloud
+  (what this wiki is about), pages you or other agents recently
+  touched (intent, not file-mtime), and per-area page counts.
+  ~4 KB cap, ~1K tokens — designed to fit any context budget.
+```
+
+The digest is always-current: a background job rebuilds the cloud
+every few minutes and the recents LRU updates on every page op.
+Persisted to SQLite so a fresh server restart already has signal.
+
+If you need the legacy mtime-sorted "recently modified pages" list
+or the filesystem-derived top-level directory list, call:
 ```
 get_wiki_context()
-→ returns page count, top-level directories, and 20 most recently modified pages
+→ same shape as before, plus the digest fields layered on for free.
 ```
+
+New clients should prefer `get_wiki_digest`; `get_wiki_context`
+remains for backwards compatibility.
 
 ## Searching
 

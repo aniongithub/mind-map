@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/digest"
 	"github.com/aniongithub/mind-map/internal/httpapi"
 	"github.com/aniongithub/mind-map/internal/logging"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
@@ -87,15 +88,55 @@ func init() {
 func runStdio(cmd *cobra.Command, args []string) error {
 	dir, _ := cmd.Flags().GetString("dir")
 
-	w, err := wiki.Open(dir)
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
+		cfg = config.DefaultConfig()
+	}
+
+	w, err := wiki.Open(dir, wiki.WithOptions(wikiOptionsFromConfig(cfg)))
 	if err != nil {
 		return fmt.Errorf("open wiki: %w", err)
 	}
 	defer w.Close()
 
+	// Spin up the digest's background maintenance (cloud rebuild +
+	// recents flush) for the duration of the stdio session. Stop
+	// before Close so a mid-rebuild ticker doesn't race the DB
+	// shutdown.
+	dm := digest.NewManager(w, digestOptionsFromConfig(cfg))
+	dm.Start(cmd.Context())
+	defer dm.Stop()
+
 	s := mindmcp.NewServer(w, nil, getVersion())
 	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 	return s.MCPServer().Run(cmd.Context(), &mcpsdk.StdioTransport{})
+}
+
+// wikiOptionsFromConfig maps the digest section of config.Config to
+// the construction-time knobs the Wiki cares about (recents capacity,
+// render cap, stopword extras). Zero/missing values keep the Wiki's
+// own defaults — DigestConfig is documented as fully optional.
+func wikiOptionsFromConfig(cfg *config.Config) wiki.Options {
+	d := cfg.Digest
+	return wiki.Options{
+		RecentsSize:    d.RecentsSize,
+		MaxRenderBytes: d.MaxRenderBytes,
+		StopwordsExtra: d.StopwordsExtra,
+	}
+}
+
+// digestOptionsFromConfig maps the digest section to the runtime
+// (ticker / rebuild) knobs the digest.Manager cares about. Same
+// "zero means default" contract.
+func digestOptionsFromConfig(cfg *config.Config) digest.Options {
+	d := cfg.Digest
+	return digest.Options{
+		CloudRefresh:   d.ParseCloudRefresh(),
+		CloudSize:      d.CloudSize,
+		StopwordsExtra: d.StopwordsExtra,
+	}
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -145,18 +186,38 @@ func runServe(cmd *cobra.Command, args []string) error {
 // runHTTPServer wires the HTTP handler from internal/httpapi and serves it.
 // Shared by the interactive `serve` command and the system service.
 func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh chan struct{}) error {
-	w, err := wiki.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open wiki: %w", err)
-	}
-	defer w.Close()
-
 	cfgPath := config.DefaultPath()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		slog.Warn("failed to load config, using defaults", slog.Any("error", err))
 		cfg = config.DefaultConfig()
 	}
+
+	w, err := wiki.Open(dir, wiki.WithOptions(wikiOptionsFromConfig(cfg)))
+	if err != nil {
+		return fmt.Errorf("open wiki: %w", err)
+	}
+	defer w.Close()
+
+	// Background digest maintenance runs for the lifetime of the
+	// HTTP server. We use a context derived from stopCh so that the
+	// graceful /api/restart path (which closes stopCh) also stops
+	// the tickers cleanly. Stopping before Close ensures the LRU
+	// flush in the manager's final tick doesn't race with db.Close.
+	dctx, dcancel := context.WithCancel(context.Background())
+	defer dcancel()
+	go func() {
+		select {
+		case <-stopCh:
+			dcancel()
+		case <-dctx.Done():
+			// Normal function return; the defer above cancelled us.
+			return
+		}
+	}()
+	dm := digest.NewManager(w, digestOptionsFromConfig(cfg))
+	dm.Start(dctx)
+	defer dm.Stop()
 
 	handler := httpapi.New(httpapi.Deps{
 		Wiki:       w,
