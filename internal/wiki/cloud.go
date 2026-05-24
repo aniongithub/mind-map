@@ -201,6 +201,30 @@ func topK(counts map[string]int, k int) []CloudTerm {
 //
 // Caller owns the goroutine and the slot it's stored in; this function
 // just does the work. Step 6 wires it to the 5-minute ticker.
+// BuildCloud computes the top-K most frequent terms across all page
+// bodies. Exposed for the digest.Manager ticker — the implementation
+// lives on the Wiki because it reads `pages` directly; the supervisor
+// owns the scheduling.
+//
+// The result mixes unigrams and bigrams: bigrams are scored by their
+// own frequency (no boost), so a phrase only beats a single word when
+// it genuinely occurs more often.
+func (w *Wiki) BuildCloud(ctx context.Context, k int, stopwordsExtra []string) ([]CloudTerm, error) {
+	return w.buildCloud(ctx, k, stopwordsExtra)
+}
+
+// SetCloud installs a freshly-built cloud into the in-memory cache.
+// Pairs with BuildCloud; the supervisor calls Build → Set → Persist.
+func (w *Wiki) SetCloud(terms []CloudTerm) {
+	w.cloud.Set(terms)
+}
+
+// PersistCloud writes the current cloud cache to wiki_state. Called
+// by the digest.Manager after a successful rebuild.
+func (w *Wiki) PersistCloud(ctx context.Context) error {
+	return w.persistCloud(ctx)
+}
+
 func (w *Wiki) buildCloud(ctx context.Context, k int, stopwordsExtra []string) ([]CloudTerm, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

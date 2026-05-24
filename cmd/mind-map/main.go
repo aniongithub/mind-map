@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/digest"
 	"github.com/aniongithub/mind-map/internal/httpapi"
 	"github.com/aniongithub/mind-map/internal/logging"
 	mindmcp "github.com/aniongithub/mind-map/internal/mcp"
@@ -93,6 +94,14 @@ func runStdio(cmd *cobra.Command, args []string) error {
 	}
 	defer w.Close()
 
+	// Spin up the digest's background maintenance (cloud rebuild +
+	// recents flush) for the duration of the stdio session. Stop
+	// before Close so a mid-rebuild ticker doesn't race the DB
+	// shutdown.
+	dm := digest.NewManager(w, digest.Options{})
+	dm.Start(cmd.Context())
+	defer dm.Stop()
+
 	s := mindmcp.NewServer(w, nil, getVersion())
 	slog.Info("mind-map MCP server starting", slog.String("mode", "stdio"), slog.String("wiki", w.Root()))
 	return s.MCPServer().Run(cmd.Context(), &mcpsdk.StdioTransport{})
@@ -150,6 +159,26 @@ func runHTTPServer(addr, dir, webuiDir string, idleTimeout time.Duration, stopCh
 		return fmt.Errorf("open wiki: %w", err)
 	}
 	defer w.Close()
+
+	// Background digest maintenance runs for the lifetime of the
+	// HTTP server. We use a context derived from stopCh so that the
+	// graceful /api/restart path (which closes stopCh) also stops
+	// the tickers cleanly. Stopping before Close ensures the LRU
+	// flush in the manager's final tick doesn't race with db.Close.
+	dctx, dcancel := context.WithCancel(context.Background())
+	defer dcancel()
+	go func() {
+		select {
+		case <-stopCh:
+			dcancel()
+		case <-dctx.Done():
+			// Normal function return; the defer above cancelled us.
+			return
+		}
+	}()
+	dm := digest.NewManager(w, digest.Options{})
+	dm.Start(dctx)
+	defer dm.Stop()
 
 	cfgPath := config.DefaultPath()
 	cfg, err := config.Load(cfgPath)
