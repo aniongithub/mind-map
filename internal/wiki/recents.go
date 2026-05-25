@@ -212,6 +212,16 @@ func (r *recentsLRU) takeDirty() bool {
 	return was
 }
 
+// peekDirty returns whether the ring has unsaved changes without
+// clearing the flag. Used by the digest.Manager's tick gate so the
+// "did anything change?" probe doesn't race with the write that
+// follows.
+func (r *recentsLRU) peekDirty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.dirty
+}
+
 // len returns the number of tracked paths. Test helper.
 func (r *recentsLRU) len() int {
 	r.mu.Lock()

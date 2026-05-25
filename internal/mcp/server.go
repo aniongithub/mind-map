@@ -80,8 +80,13 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "get_wiki_context",
-		Description: "Get wiki orientation: page count, top-level directories, and 20 most recently modified pages.",
+		Description: "Get wiki orientation: page count, top-level directories, and 20 most recently modified pages. Also returns the digest (cloud_terms, recents LRU, per-area counts, rendered markdown) for new clients — older clients can ignore the extra fields.",
 	}, s.getWikiContext)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "get_wiki_digest",
+		Description: "Get a compact, always-current per-conversation orientation of this wiki. Returns: a rendered markdown blob (suitable to paste into context), a word/phrase cloud across all page bodies (what this wiki is about), an LRU of pages the user or agent has actively touched (intent, not file-mtime), and per-area page counts. Call this at the start of every new conversation. Cheaper and more deterministic than searching blindly; complements search_pages once you know what to look for.",
+	}, s.getWikiDigest)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "get_page",
@@ -217,8 +222,32 @@ func (s *Server) getWikiContext(ctx context.Context, _ *mcp.CallToolRequest, _ a
 	return textResult(wctx)
 }
 
-// (get_page is implemented in images.go as getPageWithFlags so the
-// image-related flags live next to the rest of the image tooling.)
+// get_page is implemented in images.go as getPageWithFlags so the
+// image-related flags live next to the rest of the image tooling.
+// The old getPage handler that landed on main is intentionally
+// dropped during this merge: its signature (pagePathInput, no
+// flags) was superseded by getPageWithFlags (getPageInput with the
+// IncludeImages / IncludeImageMetadata flags) in this branch's
+// slice 3 — keeping both would mean two handlers for the same tool
+// name.
+
+func (s *Server) getWikiDigest(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	d, err := s.wiki.Digest(ctx)
+	if err != nil {
+		slog.Error("tool.get_wiki_digest failed", slog.Any("error", err))
+		return nil, nil, err
+	}
+	slog.Info("tool.get_wiki_digest",
+		slog.Int("page_count", d.PageCount),
+		slog.Int("cloud_terms", len(d.Cloud)),
+		slog.Int("recents", len(d.Recents)),
+		slog.Int("areas", len(d.Areas)),
+		slog.Int("bytes", len(d.Markdown)),
+		slog.Duration("elapsed", time.Since(start)),
+	)
+	return textResult(d)
+}
 
 func (s *Server) createPage(ctx context.Context, _ *mcp.CallToolRequest, input createInput) (*mcp.CallToolResult, any, error) {
 	start := time.Now()

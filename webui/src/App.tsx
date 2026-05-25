@@ -4,6 +4,7 @@ import { Logo } from './Logo';
 import { PageBrowser } from './PageBrowser';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
+import { TagInput } from './TagInput';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
@@ -16,8 +17,22 @@ interface SyncSettings {
     mappings?: { prefix: string; remote: string }[];
 }
 
+// DigestSettings mirrors internal/config.DigestConfig. All fields are
+// optional on the wire — a config file without a digest section
+// loads with zero values, which the consumers interpret as "use the
+// built-in defaults". The UI surfaces the same contract: empty
+// numeric inputs and an empty tag list keep server defaults intact.
+interface DigestSettings {
+    cloud_size?: number;
+    recents_size?: number;
+    cloud_refresh?: string;
+    stopwords_extra?: string[];
+    max_render_bytes?: number;
+}
+
 interface Settings {
     sync: SyncSettings;
+    digest?: DigestSettings;
 }
 
 async function loadSettings(): Promise<Settings> {
@@ -339,6 +354,21 @@ export function App() {
         setSettingsSaved(false);
     };
 
+    // updateDigest is the per-field mutator for the Digest section.
+    // It accepts the field's actual value type (number for numeric
+    // knobs, string for cloud_refresh, string[] for stopwords). The
+    // server omits the digest section entirely when it's never been
+    // set, so we lazily materialize an empty object on first touch.
+    const updateDigest = <K extends keyof DigestSettings>(field: K, value: DigestSettings[K]) => {
+        if (!settings) return;
+        setSettings({
+            ...settings,
+            digest: { ...(settings.digest ?? {}), [field]: value },
+        });
+        setSettingsDirty(true);
+        setSettingsSaved(false);
+    };
+
     const renderMarkdown = (body: string): string => {
         // Convert [[wikilinks]] to clickable links before rendering
         const withLinks = body.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, display) => {
@@ -597,6 +627,81 @@ export function App() {
                                         </div>
                                     </div>
                                 )}
+                            </div>
+
+                            <div class="settings-section">
+                                <div class="settings-section-title">Digest</div>
+                                <div class="settings-field-help">
+                                    The per-conversation orientation digest summarizes what this wiki is about. A background job rebuilds the word/phrase cloud on a schedule; the recents LRU updates on every page op. All fields are optional &mdash; leave blank to use defaults.
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Extra Stopwords</label>
+                                    <div class="hint">
+                                        Domain-specific noise to exclude from the cloud (e.g. <code>TODO</code>, <code>FIXME</code>, <code>see</code>, <code>also</code>). Comma, space, or Enter to add a tag; Backspace on empty input removes the last one.
+                                    </div>
+                                    <TagInput
+                                        value={settings.digest?.stopwords_extra ?? []}
+                                        onChange={(next) => updateDigest('stopwords_extra', next)}
+                                        placeholder="Type a word and press space, comma, or Enter"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Cloud Size</label>
+                                    <div class="hint">Top-K terms in the word/phrase cloud. Default 50.</div>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={settings.digest?.cloud_size ?? ''}
+                                        onInput={(e) => {
+                                            const v = (e.target as HTMLInputElement).value;
+                                            updateDigest('cloud_size', v === '' ? undefined : parseInt(v, 10));
+                                        }}
+                                        placeholder="50"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Recents Size</label>
+                                    <div class="hint">Active-use LRU capacity. Default 20. Applied on next restart.</div>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={settings.digest?.recents_size ?? ''}
+                                        onInput={(e) => {
+                                            const v = (e.target as HTMLInputElement).value;
+                                            updateDigest('recents_size', v === '' ? undefined : parseInt(v, 10));
+                                        }}
+                                        placeholder="20"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Cloud Refresh Interval</label>
+                                    <div class="hint">How often the cloud rebuilds (e.g. 5m, 10m). Floor: 30s. Default 5m.</div>
+                                    <input
+                                        type="text"
+                                        value={settings.digest?.cloud_refresh ?? ''}
+                                        onInput={(e) => updateDigest('cloud_refresh', (e.target as HTMLInputElement).value || undefined)}
+                                        placeholder="5m"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
+                                    <label>Max Render Bytes</label>
+                                    <div class="hint">Soft cap on the rendered markdown blob. Default 4096 (~1K tokens). Set to 0 to disable trimming.</div>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={settings.digest?.max_render_bytes ?? ''}
+                                        onInput={(e) => {
+                                            const v = (e.target as HTMLInputElement).value;
+                                            updateDigest('max_render_bytes', v === '' ? undefined : parseInt(v, 10));
+                                        }}
+                                        placeholder="4096"
+                                    />
+                                </div>
                             </div>
 
                             <div class="settings-section">

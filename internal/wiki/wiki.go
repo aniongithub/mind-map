@@ -44,11 +44,72 @@ type SearchResult struct {
 	Snippet string `json:"snippet"`
 }
 
-// WikiContext provides an overview of the wiki for orientation.
+// WikiContext provides an overview of the wiki for orientation. The
+// legacy fields (PageCount, RecentPages, TopLevelDirs) reflect disk
+// state — recent_pages is sorted by file mtime, top_level_dirs is read
+// from the filesystem — and remain available for clients that already
+// depend on that shape (opencode, Claude Code in the wild, per the
+// plan's open question #4).
+//
+// The newer fields (Cloud, Recents, Areas, Markdown) are the digest
+// signals: cloud terms across all page bodies, the active-use LRU
+// (intent, not mtime), per-area page counts pulled from the index,
+// and the rendered markdown an LLM can use directly. New clients
+// should prefer `get_wiki_digest` for these, but `get_wiki_context`
+// returns them too so existing tool wiring still benefits from the
+// orientation upgrade without a client change.
 type WikiContext struct {
 	PageCount    int      `json:"page_count"`
 	RecentPages  []Page   `json:"recent_pages"`
 	TopLevelDirs []string `json:"top_level_dirs"`
+
+	// Cloud is the top-K word/phrase cloud across all page bodies.
+	// Empty until the first ticker fires on a freshly-opened wiki.
+	Cloud []CloudTerm `json:"cloud_terms,omitempty"`
+	// Recents is the active-use LRU — paths the user/agent actually
+	// touched (Create/Update/Get/Move/GetBacklinks). Distinct from
+	// RecentPages which is mtime-based.
+	Recents []string `json:"recents,omitempty"`
+	// Areas is the per-top-level-directory page count + index title.
+	// Driven by the indexed `pages` table, not filesystem listing.
+	Areas []AreaSummary `json:"areas,omitempty"`
+	// Markdown is the rendered digest blob — the same string an LLM
+	// would consume from `get_wiki_digest`. Included here so the
+	// existing get_wiki_context call gives clients an upgrade path
+	// without a tool-name change.
+	Markdown string `json:"markdown,omitempty"`
+}
+
+// Options tunes Wiki construction. All fields are optional; the zero
+// value gives the built-in defaults (recents capacity 20, render cap
+// 4 KB, no extra stopwords). Pass with WithOptions to Open():
+//
+//	w, err := wiki.Open(dir, wiki.WithOptions(wiki.Options{
+//	    RecentsSize:    50,
+//	    MaxRenderBytes: 8192,
+//	}))
+//
+// Options is value-passed; mutating it after Open has no effect.
+type Options struct {
+	// RecentsSize is the active-use LRU capacity. Default 20.
+	RecentsSize int
+	// MaxRenderBytes caps the rendered digest markdown. Default 4096.
+	MaxRenderBytes int
+	// StopwordsExtra is forwarded to the cloud builder when invoked
+	// directly via BuildCloud. The digest.Manager passes its own
+	// copy through Options on its Manager; this field is here so
+	// non-Manager callers (tests, ad-hoc tools) get the same set.
+	StopwordsExtra []string
+}
+
+// OpenOption configures wiki.Open. Use WithOptions or future targeted
+// helpers; the variadic form keeps Open(dir) source-compatible.
+type OpenOption func(*Options)
+
+// WithOptions sets the entire Options struct in one call. The most
+// common embedder path: read config, build Options, pass to Open.
+func WithOptions(opts Options) OpenOption {
+	return func(o *Options) { *o = opts }
 }
 
 // Wiki is the core engine. Create one with Open().
@@ -66,6 +127,12 @@ type Wiki struct {
 	// digest caches the rendered markdown blob, invalidated by cloud
 	// version + recents seq changes. See digest.go.
 	digest *digestCache
+	// maxRenderBytes is the soft cap applied by Digest(); 0 means no
+	// trim (used by tests).
+	maxRenderBytes int
+	// stopwordsExtra is forwarded to buildCloud when called directly
+	// without an explicit extras list.
+	stopwordsExtra []string
 	// closed guards Close() against double-invocation: testWiki and
 	// other callers commonly stack defer Close on top of t.Cleanup.
 	// Without this guard, the second Close() runs persistRecents
@@ -80,7 +147,31 @@ type Wiki struct {
 
 // Open opens (or creates) a wiki rooted at the given directory.
 // It initializes the SQLite index and performs an initial scan.
-func Open(root string) (*Wiki, error) {
+// Pass OpenOption values (typically a single WithOptions) to tune the
+// digest signals; the default options match the digest plan's
+// recommended values (LRU=20, render cap=4096, no extra stopwords).
+func Open(root string, opts ...OpenOption) (*Wiki, error) {
+	o := Options{
+		RecentsSize:    20,
+		MaxRenderBytes: defaultMaxRenderBytes,
+	}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	if o.RecentsSize <= 0 {
+		o.RecentsSize = 20
+	}
+	// MaxRenderBytes semantics:
+	//   > 0  → trim to that many bytes
+	//   == 0 → fall back to default (4096) — most likely an
+	//          uninitialized Options struct
+	//   < 0  → no trimming (tests / power users)
+	// The field is normalized to those three states here so digest
+	// rendering can just check the sign without re-deriving intent.
+	if o.MaxRenderBytes == 0 {
+		o.MaxRenderBytes = defaultMaxRenderBytes
+	}
+
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve wiki root: %w", err)
@@ -101,15 +192,14 @@ func Open(root string) (*Wiki, error) {
 
 	sessionID := fmt.Sprintf("pid-%d-%d", os.Getpid(), time.Now().UnixNano())
 	w := &Wiki{
-		root:      absRoot,
-		db:        db,
-		sessionID: sessionID,
-		// Capacity 20 matches the plan default. Step 4 will swap this
-		// for a config-driven value (digest.recents_size); the default
-		// keeps existing callers unaffected.
-		recents: newRecentsLRU(20),
-		cloud:   &cloudCache{},
-		digest:  &digestCache{},
+		root:           absRoot,
+		db:             db,
+		sessionID:      sessionID,
+		recents:        newRecentsLRU(o.RecentsSize),
+		cloud:          &cloudCache{},
+		digest:         &digestCache{},
+		maxRenderBytes: o.MaxRenderBytes,
+		stopwordsExtra: o.StopwordsExtra,
 	}
 	if err := w.initSchema(); err != nil {
 		db.Close()

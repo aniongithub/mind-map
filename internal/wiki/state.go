@@ -196,3 +196,30 @@ func (w *Wiki) persistCloud(ctx context.Context) error {
 	}
 	return w.writeStateKey(ctx, stateKeyCloud, string(data))
 }
+
+// PersistRecents is the exported entry point for the digest.Manager's
+// 30-second flush ticker. The internal persistRecents helper is also
+// called by Close() for a clean shutdown flush.
+//
+// PersistRecents clears the LRU's dirty flag on success: a follow-up
+// RecentsDirty() will report false until the next touch. Callers that
+// want to skip a redundant write should peek with RecentsDirty before
+// calling this; PersistRecents itself always writes.
+func (w *Wiki) PersistRecents(ctx context.Context) error {
+	if err := w.persistRecents(ctx); err != nil {
+		return err
+	}
+	// Clear dirty only after a successful write — if the write failed,
+	// the in-memory state is still ahead of disk and the next tick
+	// should retry.
+	w.recents.takeDirty()
+	return nil
+}
+
+// RecentsDirty reports whether the LRU has unsaved changes since the
+// last successful PersistRecents. Read-only — does not clear the flag.
+// The digest.Manager uses this to skip redundant writes on an idle
+// server.
+func (w *Wiki) RecentsDirty() bool {
+	return w.recents.peekDirty()
+}

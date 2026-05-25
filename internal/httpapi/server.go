@@ -161,6 +161,7 @@ func (s *Server) shutdown() {
 func (s *Server) register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/version", s.getVersion)
 	mux.HandleFunc("GET /api/context", s.getContext)
+	mux.HandleFunc("GET /api/digest", s.getDigest)
 	mux.HandleFunc("GET /api/pages", s.listPages)
 	mux.HandleFunc("GET /api/pages/{path...}", s.getPage)
 	mux.HandleFunc("POST /api/pages", s.createPage)
@@ -305,6 +306,27 @@ func (s *Server) getContext(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, wctx)
+}
+
+// getDigest handles GET /api/digest. Returns the full Digest struct
+// (page count, cloud terms, recents LRU, per-area summaries, rendered
+// markdown). Intended for two callers:
+//
+//   - Agents / MCP clients that prefer the HTTP path over the MCP
+//     tool (e.g. tests, scripts, or alternate clients).
+//   - The WebUI, which can render its own widgets (e.g. a word-cloud
+//     visualization) off the structured fields rather than parsing
+//     the markdown.
+//
+// Cheap on cache hit, sub-millisecond on miss. Safe to call frequently
+// (e.g. WebUI polling); the in-memory digestCache absorbs the load.
+func (s *Server) getDigest(rw http.ResponseWriter, r *http.Request) {
+	d, err := s.deps.Wiki.Digest(r.Context())
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, d)
 }
 
 func (s *Server) listPages(rw http.ResponseWriter, r *http.Request) {

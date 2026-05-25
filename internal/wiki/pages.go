@@ -484,7 +484,13 @@ func (w *Wiki) AllLinks(ctx context.Context) ([]Link, error) {
 	return links, nil
 }
 
-// Context returns a WikiContext overview.
+// Context returns a WikiContext overview. The legacy fields
+// (PageCount, RecentPages, TopLevelDirs) come from disk — recent_pages
+// is mtime-sorted, top_level_dirs is read from the filesystem — and
+// preserve the shape clients in the wild already depend on. The new
+// fields (Cloud, Recents, Areas, Markdown) come from the digest so
+// existing get_wiki_context callers get the orientation upgrade
+// without switching tool names.
 func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -521,11 +527,25 @@ func (w *Wiki) Context(ctx context.Context) (*WikiContext, error) {
 	// Top-level dirs
 	dirs := w.topLevelDirs()
 
-	return &WikiContext{
+	wctx := &WikiContext{
 		PageCount:    count,
 		RecentPages:  recent,
 		TopLevelDirs: dirs,
-	}, nil
+	}
+
+	// Layer the digest's signals on top. A failure here doesn't fail
+	// the whole Context() call — the legacy fields are still valuable
+	// on their own, and the digest is an enhancement, not a contract.
+	if d, err := w.Digest(ctx); err == nil {
+		wctx.Cloud = d.Cloud
+		wctx.Recents = d.Recents
+		wctx.Areas = d.Areas
+		wctx.Markdown = d.Markdown
+	} else {
+		slog.Warn("context digest enrichment failed", slog.Any("error", err))
+	}
+
+	return wctx, nil
 }
 
 // --- locking ---
