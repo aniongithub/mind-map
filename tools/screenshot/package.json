@@ -1,0 +1,12 @@
+{
+  "name": "mind-map-screenshot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "End-to-end visual test harness for mind-map. Launches a real Chromium against a running mind-map server, captures screenshots of representative views, uploads them via POST /api/assets, and embeds the references into the appropriate architecture pages. Used to verify the image-support pipeline (upload \u2192 reference \u2192 static handler \u2192 marked rendering) works for real, not just in unit tests.",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
