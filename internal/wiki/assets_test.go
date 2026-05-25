@@ -320,3 +320,74 @@ func TestMovePageLeavesSharedAssetsBehind(t *testing.T) {
 		t.Errorf("alice lost her reference: %q", a.Body)
 	}
 }
+
+// --- DeleteAsset ---
+
+func TestDeleteAssetRemovesFileAndIndexRows(t *testing.T) {
+	w, dir := testWiki(t)
+	ctx := context.Background()
+
+	uploaded, err := w.UploadAsset(ctx, "projects/mind-map", "doomed.png", onePixelPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.UpdatePage(ctx, "projects/mind-map",
+		"# mm\n\n![d]("+uploaded+")\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.DeleteAsset(ctx, uploaded); err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+
+	abs := filepath.Join(dir, filepath.FromSlash(uploaded))
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Errorf("asset still on disk: %v", err)
+	}
+
+	var n int
+	if err := w.db.QueryRow(
+		"SELECT COUNT(*) FROM links WHERE target = ? AND kind = 'image'",
+		uploaded,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("link rows still present after delete: %d", n)
+	}
+}
+
+func TestDeleteAssetMissingReturnsNotFound(t *testing.T) {
+	w, _ := testWiki(t)
+	err := w.DeleteAsset(context.Background(),
+		"projects/mind-map.assets/never-existed.png")
+	if !errors.Is(err, ErrAssetNotFound) {
+		t.Errorf("err = %v, want ErrAssetNotFound", err)
+	}
+}
+
+func TestDeleteAssetRejectsTraversal(t *testing.T) {
+	w, _ := testWiki(t)
+	err := w.DeleteAsset(context.Background(), "../../../etc/passwd")
+	if err == nil {
+		t.Fatal("DeleteAsset accepted traversal path")
+	}
+	if errors.Is(err, ErrAssetNotFound) {
+		t.Errorf("traversal rejected as not-found; should be a path-validation error: %v", err)
+	}
+}
+
+func TestDeleteAssetSweepsEmptySidecar(t *testing.T) {
+	w, dir := testWiki(t)
+	ctx := context.Background()
+
+	uploaded, _ := w.UploadAsset(ctx, "projects/mind-map", "only.png", onePixelPNG)
+	if err := w.DeleteAsset(ctx, uploaded); err != nil {
+		t.Fatal(err)
+	}
+
+	sidecar := filepath.Join(dir, "projects/mind-map.assets")
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Errorf("empty sidecar dir not swept: %v", err)
+	}
+}

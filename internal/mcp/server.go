@@ -137,6 +137,11 @@ func (s *Server) registerTools() {
 		Name:        "download_image",
 		Description: "Read an image asset and return it as MCP ImageContent so vision-capable agents can see it directly. Path is the wiki-relative asset path as it appears in markdown references.",
 	}, s.downloadImage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "delete_image",
+		Description: "Remove an image asset from the wiki. Pages that still reference the deleted image will have a dangling markdown link until edited — the caller is responsible for cleaning up references. Useful for capture tooling that wants a clean canonical filename across re-runs rather than auto-suffixed duplicates.",
+	}, s.deleteImage)
 }
 
 // --- Tool input types ---

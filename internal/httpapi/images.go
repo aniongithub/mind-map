@@ -32,6 +32,7 @@ import (
 // registerAssets wires the asset routes. Called from register().
 func (s *Server) registerAssets(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/assets", s.uploadAsset)
+	mux.HandleFunc("DELETE /api/assets/{path...}", s.deleteAsset)
 	mux.HandleFunc("GET /assets/{path...}", s.serveAsset)
 }
 
@@ -176,6 +177,31 @@ func readAssetUpload(r *http.Request) (page, name string, content []byte, err er
 // The cap mostly exists to bound multipart parsing memory.
 func defaultUploadCapForRequest(_ *http.Request) int64 {
 	return 128 * 1024 * 1024
+}
+
+// deleteAsset handles DELETE /api/assets/<path>. Removes the asset
+// file (and any index rows referencing it). Pages that still embed
+// the asset will have a dangling markdown reference until they are
+// edited — the caller is expected to clean those up if it cares.
+func (s *Server) deleteAsset(rw http.ResponseWriter, r *http.Request) {
+	assetPath := r.PathValue("path")
+	if assetPath == "" {
+		http.Error(rw, "asset path is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.deps.Wiki.DeleteAsset(r.Context(), assetPath); err != nil {
+		if errors.Is(err, wiki.ErrAssetNotFound) {
+			http.NotFound(rw, r)
+			return
+		}
+		slog.Warn("http delete_asset failed",
+			slog.String("path", assetPath), slog.Any("error", err))
+		http.Error(rw, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(rw, map[string]string{"status": "deleted", "path": assetPath})
 }
 
 // serveAsset handles GET /assets/<path>. Reads the asset from the

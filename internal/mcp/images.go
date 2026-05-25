@@ -148,6 +148,29 @@ func (s *Server) downloadImage(ctx context.Context, _ *mcp.CallToolRequest, in d
 	}, nil, nil
 }
 
+// deleteImageInput is the request shape for delete_image.
+type deleteImageInput struct {
+	Path string `json:"path" jsonschema:"wiki-relative path to the image to delete, e.g. projects/mind-map.assets/diagram.png"`
+}
+
+func (s *Server) deleteImage(ctx context.Context, _ *mcp.CallToolRequest, in deleteImageInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	if err := s.wiki.DeleteAsset(ctx, in.Path); err != nil {
+		slog.Warn("tool.delete_image failed",
+			slog.String("path", in.Path), slog.Any("error", err))
+		return nil, nil, err
+	}
+	slog.Info("tool.delete_image",
+		slog.String("path", in.Path),
+		slog.Duration("elapsed", time.Since(start)),
+	)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "Deleted image: " + in.Path},
+		},
+	}, nil, nil
+}
+
 // pageReadFlags carries the optional image-related read flags used by
 // get_page and search_pages. Kept as a named type so the schema
 // descriptions land on the same set of fields everywhere.

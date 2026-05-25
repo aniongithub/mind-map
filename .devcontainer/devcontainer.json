@@ -14,6 +14,16 @@
     },
     "ghcr.io/devcontainers/features/sshd:1": {
       "version": "latest"
+    },
+    // Playwright + browsers + Linux runtime libs in one shot. The
+    // feature's install.sh runs `npx playwright install --with-deps`
+    // as the remote user, so the browser binaries land in
+    // /home/vscode/.cache/ms-playwright/ and the apt-side runtime
+    // libs (libnss3, libgbm1, etc.) are pulled in too. Reproducible
+    // and dramatically simpler than maintaining the dep list in our
+    // Dockerfile.
+    "ghcr.io/schlich/devcontainer-features/playwright:0": {
+      "browsers": "chromium"
     }
   },
   // Runs on the HOST before the container is created/started. Picks a

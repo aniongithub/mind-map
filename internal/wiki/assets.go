@@ -219,6 +219,76 @@ func (w *Wiki) StatAsset(ctx context.Context, assetPath string) (*AssetInfo, err
 	}, nil
 }
 
+// DeleteAsset removes an asset file from disk. Best for callers (the
+// screenshot harness, an explicit MCP "remove this image" tool) that
+// have an asset path and want it gone regardless of whether any page
+// still references it. The caller is responsible for the page-body
+// cleanup; this method only touches the file and the index.
+//
+// Behavior:
+//
+//   - Validates the path against the wiki root (same traversal guard
+//     as ReadAsset/StatAsset).
+//   - Removes the file. Missing file maps to ErrAssetNotFound so a
+//     caller doing a double-delete sees an unambiguous signal.
+//   - Removes any kind='image' rows in the link index where target
+//     matches. Pages that still reference the deleted asset will have
+//     a dangling markdown link until they're next reindexed — that's
+//     by design, since editing every page that links to the asset is
+//     out of scope for an asset-delete call.
+//   - Removes the parent sidecar directory if it's empty afterward,
+//     keeping the wiki tree tidy.
+func (w *Wiki) DeleteAsset(ctx context.Context, assetPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	abs, err := w.resolveAssetPath(assetPath)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(abs); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s", ErrAssetNotFound, assetPath)
+		}
+		return err
+	}
+
+	if err := os.Remove(abs); err != nil {
+		return fmt.Errorf("remove asset: %w", err)
+	}
+
+	// Clean the asset's index rows. Normalize to forward slashes
+	// because that's how the indexer stores image targets (matches
+	// what extractImages writes).
+	rel := filepath.ToSlash(strings.TrimPrefix(abs, w.root+string(filepath.Separator)))
+	if _, err := w.db.ExecContext(ctx,
+		"DELETE FROM links WHERE target = ? AND kind = 'image'",
+		rel,
+	); err != nil {
+		slog.Warn("delete asset: link index cleanup failed",
+			slog.String("asset", rel), slog.Any("error", err))
+	}
+
+	// If the sidecar directory is now empty, drop it. os.Remove fails
+	// on non-empty dirs, which is exactly the "still has other files"
+	// case we want to leave alone.
+	sidecar := filepath.Dir(abs)
+	if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+		// Non-empty or permission error — not fatal, just log at debug
+		// since "non-empty" is the common, expected case when other
+		// assets live in the same sidecar.
+		slog.Debug("delete asset: sidecar dir not removed (likely non-empty)",
+			slog.String("dir", filepath.ToSlash(strings.TrimPrefix(sidecar, w.root+string(filepath.Separator)))),
+			slog.Any("error", err),
+		)
+	}
+
+	slog.Info("asset deleted", slog.String("path", rel))
+	return nil
+}
+
 // resolveAssetPath validates a wiki-relative asset path and returns its
 // absolute filesystem path. Rejects traversal attempts (..) and any
 // path that doesn't resolve under the wiki root.

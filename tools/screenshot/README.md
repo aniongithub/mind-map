@@ -14,17 +14,22 @@ again) works for real.
 
 ## Setup
 
-Run inside the devcontainer (which has Chromium's runtime deps
-preinstalled via `.devcontainer/Dockerfile`):
+Inside the devcontainer, Playwright and its browsers are installed by the
+[`ghcr.io/schlich/devcontainer-features/playwright`](https://github.com/schlich/devcontainer-features/tree/main/src/playwright)
+feature declared in `.devcontainer/devcontainer.json`. The browser binary and
+all its Linux runtime libs land in `~/.cache/ms-playwright/` automatically
+during container build — no manual `npx playwright install` step required.
+
+The local `node_modules/` for this harness is still managed by npm because
+`capture.mjs` imports `playwright` as a dependency. One `npm install` here
+once after a fresh clone:
 
 ```sh
 cd tools/screenshot
 npm install
-npx playwright install chromium
 ```
 
-`node_modules/`, the downloaded Chromium binary, and `captured/` are
-all gitignored.
+`node_modules/`, `package-lock.json`, and `captured/` are gitignored.
 
 ## Run
 

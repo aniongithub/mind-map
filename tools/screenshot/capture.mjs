@@ -1,94 +1,204 @@
 #!/usr/bin/env node
-// End-to-end visual test for mind-map's image-support feature.
+// End-to-end demo + visual test for mind-map's image-support feature.
 //
-// Flow:
-//   1. Connect to a running mind-map server (default http://localhost:4242).
-//   2. For each view in CAPTURES, navigate the browser, wait for content,
-//      and take a full-page screenshot.
-//   3. Save each PNG to ./captured/ so a human can diff or attach to a PR.
-//   4. Upload each PNG via POST /api/assets to the configured page.
-//   5. PUT the page with the embed reference appended.
-//   6. Verify by GETting /assets/<path> and checking the bytes match.
+// Composition model: each capture entry has an async `compose(page)`
+// function that puts the SPA into the desired state — navigate,
+// click controls, fill inputs, set localStorage for theme/sort, etc.
+// The capture runs after compose returns, so this script can be
+// extended with new shots by appending entries; the rest of the
+// machinery doesn't change.
 //
-// This exercises the whole pipeline end-to-end: upload tool ->
-// sidecar storage -> link indexing -> static handler -> marked
-// rendering in the SPA. If any of the slices regressed, this script
-// fails with a concrete error pointing at the broken seam.
+// Lifecycle of each capture:
+//   1. DELETE /api/assets/<page>.assets/<name> — drop any prior
+//      version so re-runs produce a single canonical file (no -1/-2
+//      suffix accumulation).
+//   2. compose(page) sets up the SPA state.
+//   3. Screenshot the viewport, save to ./captured/<name>.
+//   4. Upload via POST /api/assets, then GET /assets/<path> to
+//      byte-verify the static handler.
+//   5. After all captures, PUT each touched page once with the
+//      managed sentinel block replaced.
+//
+// Sync: this harness mutates pages and assets via the wiki API. If
+// sync is enabled with direction:pull, the next sync tick will wipe
+// the edits. Either disable sync or set direction:push before
+// running.
 
 import { chromium } from 'playwright';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Buffer } from 'node:buffer';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CAPTURED_DIR = resolve(__dirname, 'captured');
 
-const SERVER = process.env.MINDMAP_URL || 'http://localhost:4242';
+const SERVER = process.env.MINDMAP_URL || 'http://localhost:51888';
 
-// Each capture describes one screenshot. `page` is the wiki page it
-// gets embedded into; the asset name keeps a stable filename across
-// runs so the page body's reference stays valid.
-// Each capture describes one screenshot. `setup` is an async function
-// that puts the page into the desired state (navigate, click, fill
-// search, etc.); `embedPage` is the wiki page that receives the
-// rendered <img> reference. Stable filenames mean re-runs replace the
-// existing screenshot instead of accumulating duplicates.
+// Compose helpers used across captures. Kept here rather than inside
+// the entries so the entries stay readable.
+
+async function setTheme(page, theme) {
+    // Theme is persisted in localStorage and applied as a `.dark`
+    // class on <html>. Setting both before navigation ensures the
+    // first paint matches; flushing again post-navigation guards
+    // against the app's own initialization overwriting our value
+    // from prefers-color-scheme.
+    await page.addInitScript((t) => {
+        localStorage.setItem('mm-theme', t);
+    }, theme);
+}
+
+async function setSortMode(page, mode) {
+    await page.addInitScript((m) => {
+        localStorage.setItem('mm-sort-mode', m);
+    }, mode);
+}
+
+async function waitForMarkdown(page) {
+    try {
+        await page.waitForSelector('.markdown', { timeout: 5000 });
+    } catch (_) {
+        // Best-effort; capture whatever rendered.
+    }
+}
+
+async function waitForGraph(page) {
+    // The graph canvas takes a moment to lay out (force simulation).
+    // Wait for the fit-all button to be reachable as a proxy for
+    // "graph is up", then a beat for the animation to settle.
+    try {
+        await page.waitForSelector('button.graph-fit', { timeout: 5000 });
+    } catch (_) { }
+    await page.waitForTimeout(800);
+}
+
+async function fitGraph(page) {
+    const btn = page.locator('button.graph-fit').first();
+    if (await btn.isVisible().catch(() => false)) {
+        await btn.click();
+        await page.waitForTimeout(600); // fit animation
+    }
+}
+
+async function fillSearch(page, q) {
+    const input = page.locator('input[placeholder="search..."]').first();
+    await input.fill(q);
+    await input.press('Enter');
+    await page.waitForTimeout(700);
+}
+
+// CAPTURES is the source of truth for what gets shot, where it lands,
+// and how the SPA gets put into the right state.
 const CAPTURES = [
     {
-        name: 'home.png',
+        name: 'home-graph-fit.png',
         embedPage: 'architecture/index',
-        caption: 'Home view (graph + sidebar)',
-        setup: async (page) => {
+        caption: 'Home: graph view fitted to the viewport',
+        compose: async (page) => {
+            await setSortMode(page, 'title');
+            await setTheme(page, 'light');
             await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
-            await page.waitForTimeout(800);
+            await waitForGraph(page);
+            await fitGraph(page);
+        },
+    },
+    {
+        name: 'home-graph-dark.png',
+        embedPage: 'architecture/index',
+        caption: 'Home: graph view in dark mode (same data, theme toggle demo)',
+        compose: async (page) => {
+            await setSortMode(page, 'title');
+            await setTheme(page, 'dark');
+            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
+            await waitForGraph(page);
+            await fitGraph(page);
         },
     },
     {
         name: 'page-detail.png',
         embedPage: 'architecture/wiki-engine',
-        caption: 'Page detail with rendered markdown and wikilinks',
-        setup: async (page) => {
+        caption: 'Page detail: rendered markdown, wikilinks, and embedded mermaid diagrams',
+        compose: async (page) => {
+            await setTheme(page, 'light');
             await page.goto(SERVER + '/#/architecture/wiki-engine', { waitUntil: 'networkidle' });
-            try {
-                await page.waitForSelector('.markdown', { timeout: 5000 });
-            } catch (_) {/* render anyway */ }
-            await page.waitForTimeout(500);
+            await waitForMarkdown(page);
+            await page.waitForTimeout(800); // let mermaid finish
         },
     },
     {
-        name: 'search.png',
-        embedPage: 'architecture/mcp-server',
-        caption: 'Full-text search across the wiki',
-        setup: async (page) => {
-            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
-            await page.waitForTimeout(500);
-            // The sidebar search input is a placeholder="search..." text input.
-            const input = page.locator('input[placeholder="search..."]').first();
-            await input.fill('wiki');
-            await input.press('Enter');
-            await page.waitForTimeout(800);
-        },
-    },
-    {
-        name: 'mcp-page.png',
+        name: 'sort-recent.png',
         embedPage: 'architecture/web-ui',
-        caption: 'MCP server page with embedded code blocks',
-        setup: async (page) => {
-            await page.goto(SERVER + '/#/architecture/mcp-server', { waitUntil: 'networkidle' });
-            try {
-                await page.waitForSelector('.markdown', { timeout: 5000 });
-            } catch (_) { }
-            await page.waitForTimeout(500);
+        caption: 'Sidebar: recent-first sort (mtime-ordered list)',
+        compose: async (page) => {
+            await setSortMode(page, 'recent');
+            await setTheme(page, 'light');
+            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
+            await waitForGraph(page);
+            await fitGraph(page);
+        },
+    },
+    {
+        name: 'sort-path.png',
+        embedPage: 'architecture/web-ui',
+        caption: 'Sidebar: path-tree sort (hierarchical view)',
+        compose: async (page) => {
+            await setSortMode(page, 'path');
+            await setTheme(page, 'light');
+            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
+            await waitForGraph(page);
+            await fitGraph(page);
+        },
+    },
+    {
+        name: 'sort-title.png',
+        embedPage: 'architecture/web-ui',
+        caption: 'Sidebar: title-alphabetical sort',
+        compose: async (page) => {
+            await setSortMode(page, 'title');
+            await setTheme(page, 'light');
+            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
+            await waitForGraph(page);
+            await fitGraph(page);
+        },
+    },
+    {
+        name: 'search-sidebar.png',
+        embedPage: 'architecture/mcp-server',
+        caption: 'Sidebar search: results filtered + highlighted as you type',
+        compose: async (page) => {
+            await setSortMode(page, 'title');
+            await setTheme(page, 'light');
+            await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
+            await waitForGraph(page);
+            await fillSearch(page, 'wiki');
+        },
+    },
+    {
+        name: 'search-in-page.png',
+        embedPage: 'architecture/mcp-server',
+        caption: 'In-page search: match-highlighting in the rendered body',
+        compose: async (page) => {
+            await setSortMode(page, 'title');
+            await setTheme(page, 'light');
+            // Navigate without query first, then set the query via the
+            // sidebar search — initial-load hash parsing doesn't pick
+            // up ?q= on first paint in all cases, but a real user-
+            // initiated search always works.
+            await page.goto(SERVER + '/#/architecture/wiki-engine', { waitUntil: 'networkidle' });
+            await waitForMarkdown(page);
+            await fillSearch(page, 'index');
+            await page.waitForTimeout(400);
         },
     },
     {
         name: 'settings.png',
         embedPage: 'architecture/http-api',
-        caption: 'Settings modal (sync configuration)',
-        setup: async (page) => {
+        caption: 'Settings: sync configuration and direction toggle',
+        compose: async (page) => {
+            await setTheme(page, 'light');
             await page.goto(SERVER + '/#/', { waitUntil: 'networkidle' });
-            await page.waitForTimeout(500);
+            await waitForGraph(page);
             const btn = page.locator('button.settings-toggle').first();
             await btn.click();
             await page.waitForSelector('.settings-title', { timeout: 5000 });
@@ -97,29 +207,39 @@ const CAPTURES = [
     },
 ];
 
-async function waitForServer(url, attempts = 30) {
+// --- API helpers ---
+
+async function waitForServer(attempts = 30) {
     for (let i = 0; i < attempts; i++) {
         try {
-            const res = await fetch(url + '/api/version');
-            if (res.ok) {
-                return await res.json();
-            }
-        } catch (_) { /* not up yet */ }
+            const res = await fetch(SERVER + '/api/version');
+            if (res.ok) return await res.json();
+        } catch (_) { }
         await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(`server at ${url} did not respond after ${attempts} attempts`);
+    throw new Error(`server at ${SERVER} did not respond after ${attempts} attempts`);
+}
+
+async function deleteAssetIfExists(page, name) {
+    // Best-effort: it's fine for the DELETE to 404 on the first run
+    // when the file doesn't exist yet. We only want to clean up
+    // prior versions to keep filenames canonical (home.png stays
+    // home.png across runs, no -1/-2 suffix accumulation).
+    const path = `${page}.assets/${name}`;
+    const res = await fetch(SERVER + '/api/assets/' + path, { method: 'DELETE' });
+    if (res.ok || res.status === 404) return;
+    console.warn(`  warning: DELETE /api/assets/${path} returned ${res.status}`);
 }
 
 async function uploadAsset(page, name, bytes) {
-    const body = JSON.stringify({
-        page,
-        name,
-        content_base64: bytes.toString('base64'),
-    });
     const res = await fetch(SERVER + '/api/assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
+        body: JSON.stringify({
+            page,
+            name,
+            content_base64: bytes.toString('base64'),
+        }),
     });
     if (!res.ok) {
         throw new Error(`upload failed ${res.status}: ${await res.text()}`);
@@ -129,9 +249,7 @@ async function uploadAsset(page, name, bytes) {
 
 async function getPageBody(path) {
     const res = await fetch(SERVER + '/api/pages/' + path);
-    if (!res.ok) {
-        throw new Error(`get page ${path} failed ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`get page ${path} failed ${res.status}`);
     return await res.json();
 }
 
@@ -149,9 +267,7 @@ async function putPage(path, content) {
 
 async function verifyServed(assetPath, expected) {
     const res = await fetch(SERVER + '/assets/' + assetPath);
-    if (!res.ok) {
-        throw new Error(`serve ${assetPath} failed ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`serve ${assetPath} failed ${res.status}`);
     const got = Buffer.from(await res.arrayBuffer());
     if (got.length !== expected.length) {
         throw new Error(`served length mismatch ${got.length} vs ${expected.length}`);
@@ -163,9 +279,10 @@ async function verifyServed(assetPath, expected) {
     }
 }
 
-// rebuildBody is the idempotent way to embed all captures into a page.
-// We replace a managed sentinel block so re-running the script
-// overwrites the existing references instead of appending duplicates.
+// rebuildBody overwrites the managed sentinel block on a page with a
+// fresh gallery. Idempotent: re-running replaces the prior block
+// rather than appending. Content outside the sentinel block is
+// untouched.
 function rebuildBody(originalBody, embeds) {
     const sentinelStart = '<!-- mind-map screenshots: managed; do not edit by hand -->';
     const sentinelEnd = '<!-- /mind-map screenshots -->';
@@ -189,35 +306,39 @@ function rebuildBody(originalBody, embeds) {
 }
 
 async function main() {
-    console.log('mind-map screenshot test against', SERVER);
+    console.log('mind-map demo capture against', SERVER);
 
-    const version = await waitForServer(SERVER);
+    const version = await waitForServer();
     console.log('server version:', version);
 
     await mkdir(CAPTURED_DIR, { recursive: true });
 
     const browser = await chromium.launch({
-        // --no-sandbox is required in the devcontainer (we run as a
-        // non-root user without /proc/sys/user/max_user_namespaces).
         args: ['--no-sandbox'],
     });
-    const context = await browser.newContext({
-        viewport: { width: 1280, height: 800 },
-        deviceScaleFactor: 2, // sharper screenshots
-    });
 
-    // Group captures by embedPage so each page is updated once with
-    // all of its captures in one PUT.
+    // Group captures by embedPage so each page gets ONE PUT with all
+    // its embeds in order. Pages can host multiple screenshots.
     const perPage = new Map();
 
     try {
         for (const cap of CAPTURES) {
-            console.log('  capture', cap.name);
+            console.log('  capture', cap.name, '->', cap.embedPage);
+
+            // Drop any prior version so the filename stays canonical.
+            await deleteAssetIfExists(cap.embedPage, cap.name);
+
+            // Fresh context per capture so localStorage / addInitScript
+            // calls don't bleed across shots (e.g. theme changes).
+            const context = await browser.newContext({
+                viewport: { width: 1440, height: 900 },
+                deviceScaleFactor: 2,
+            });
             const page = await context.newPage();
             try {
-                await cap.setup(page);
+                await cap.compose(page);
                 const buf = await page.screenshot({
-                    fullPage: false, // viewport-sized; full-page tends to be huge
+                    fullPage: false,
                     type: 'png',
                 });
 
@@ -225,10 +346,8 @@ async function main() {
                 await writeFile(localPath, buf);
 
                 const upload = await uploadAsset(cap.embedPage, cap.name, buf);
-                console.log('    uploaded to', upload.path);
+                console.log('    uploaded', upload.path, `(${buf.length} bytes)`);
 
-                // Verify the static handler serves the bytes back
-                // identically before we touch the page body.
                 await verifyServed(upload.path, buf);
 
                 if (!perPage.has(cap.embedPage)) perPage.set(cap.embedPage, []);
@@ -238,6 +357,7 @@ async function main() {
                 });
             } finally {
                 await page.close();
+                await context.close();
             }
         }
     } finally {
