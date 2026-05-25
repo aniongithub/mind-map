@@ -16,6 +16,14 @@
       "version": "latest"
     }
   },
+  // Runs on the HOST before the container is created/started. Picks a
+  // free TCP port, writes it to .devcontainer/ports.env. The container
+  // runs with --network host (see runArgs) so the same port number is
+  // both the in-container bind and the host-visible address — no port
+  // forwarding involved. See the wiki page
+  // [[preferences/devcontainer-ports]] for the full rationale and the
+  // consumer recipes (launch.json, tasks.json, host scripts).
+  "initializeCommand": ".devcontainer/initializeCommand.sh",
   "postCreateCommand": "go version && node --version",
   "postAttachCommand": "npm install --prefix webui",
   "customizations": {
@@ -26,7 +34,10 @@
         "ethan-reesor.vscode-go-test-adapter",
         "idered.npm",
         "qwtel.sqlite-viewer",
-        "dbaeumer.vscode-eslint"
+        "dbaeumer.vscode-eslint",
+        // shellCommand.execute input type, used by launch.json to read
+        // .devcontainer/ports.env into the Chrome launch URL.
+        "augustocdias.tasks-shell-input"
       ],
       "settings": {
         "go.buildTags": "",
@@ -36,7 +47,19 @@
       }
     }
   },
-  "appPort": ["127.0.0.1:51888:4242"],
+  // No appPort: --network host below means no port forwarding is
+  // involved, so there's no host:container mapping to specify. The
+  // server binds directly on the host's network namespace at whatever
+  // port initializeCommand picked.
+  //
+  // --env-file injects MIND_MAP_HOST_PORT into the container so the
+  // mind-map binary (which reads it via `serve --addr`) listens on
+  // the right port. host-side consumers (launch.json, scripts) read
+  // the same file directly.
+  "runArgs": [
+    "--network", "host",
+    "--env-file", ".devcontainer/ports.env"
+  ],
   "portsAttributes": {
     "4242": {
       "label": "mind-map Server (devcontainer)",

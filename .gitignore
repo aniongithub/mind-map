@@ -15,3 +15,9 @@ webui/node_modules/
 .vscode/cache/
 __debug_bin*
 *.exe
+
+# Devcontainer host-port pick. Written by .devcontainer/initializeCommand.sh
+# at container-create time. Host-specific + per-run, so it must never be
+# committed. See the wiki page preferences/devcontainer-ports for the
+# pattern.
+.devcontainer/ports.env

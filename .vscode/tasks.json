@@ -45,9 +45,19 @@
             "problemMatcher": ["$go"]
         },
         {
+            // Probes the port the server is bound to. The container
+            // runs with --network host (see devcontainer.json), so
+            // the host and container see the same port number —
+            // whatever value initializeCommand.sh wrote to
+            // .devcontainer/ports.env and propagated into the
+            // container via --env-file. Sourcing the file in the
+            // shell command is the simplest portable way to read it;
+            // it avoids the need for the tasks-shell-input extension
+            // for tasks (the input is only used by launch.json's
+            // Chrome URL). See [[preferences/devcontainer-ports]].
             "label": "waitForServer",
             "type": "shell",
-            "command": "while ! nc -z localhost 4242; do sleep 1; done",
+            "command": "set -a; source ${workspaceFolder}/.devcontainer/ports.env; set +a; while ! nc -z localhost \"$MIND_MAP_HOST_PORT\"; do sleep 1; done",
             "group": "none",
             "dependsOn": ["build-webui"],
             "problemMatcher": {
