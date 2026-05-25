@@ -23,11 +23,30 @@ type SyncRegistrar interface {
 	HasMapping(pagePath string) bool
 }
 
+// SyncRegistrarWithLFS is satisfied by sync managers that accept an
+// LFS option alongside the direction. MCP's register_sync tool prefers
+// this when available; if the wired registrar only implements
+// SyncRegistrar (older mocks / tests), the LFS flags from the tool
+// input are silently dropped and a warning is logged.
+//
+// We keep the LFS arguments as plain types (bool + []string) rather
+// than a named struct so that *sync.Manager can implement this
+// interface without the mcp package depending on the sync package's
+// types or vice versa.
+type SyncRegistrarWithLFS interface {
+	RegisterMappingWithLFS(prefix, remote string, direction config.SyncDirection, lfs bool, lfsPatterns []string) error
+}
+
 // Server wraps a Wiki and exposes it as MCP tools.
 type Server struct {
 	wiki   *wiki.Wiki
 	sync   SyncRegistrar
 	server *mcp.Server
+	// forceImagesOff, when true, makes get_page / search_pages behave
+	// as if include_images and include_image_metadata are both false
+	// regardless of caller request. Set by operators for token-
+	// constrained deployments via SetForceImagesOff.
+	forceImagesOff bool
 }
 
 // NewServer creates an MCP server backed by the given wiki.
@@ -71,8 +90,8 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "get_page",
-		Description: "Read a wiki page with parsed frontmatter, body, outgoing links, and backlinks.",
-	}, s.getPage)
+		Description: "Read a wiki page with parsed frontmatter, body, outgoing links, and backlinks. Optional flags include_images (returns referenced images as MCP image content for vision agents) and include_image_metadata (returns {path,size,mime} per image without bytes). Both default off to keep token cost predictable.",
+	}, s.getPageWithFlags)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "create_page",
@@ -113,6 +132,21 @@ func (s *Server) registerTools() {
 		Name:        "reindex_wiki",
 		Description: "Force a full reindex pass over the wiki's on-disk markdown files. Use when you've edited files outside the wiki API and want the index (search, page list, backlinks) to reflect disk state without restarting the server. The pass is incremental — unchanged files are skipped via mtime — so it's cheap to call. Returns stats: total/added/updated/removed/unchanged/elapsed_ms.",
 	}, s.reindexWiki)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "upload_image",
+		Description: "Upload an image to a page's sidecar directory and return its markdown-ready path. The agent then embeds the reference (e.g. ![alt](returned/path)) via update_page or edit_page. Image bytes must be base64-encoded; supported formats track what browsers render natively (PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, ICO). Collisions auto-suffix.",
+	}, s.uploadImage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "download_image",
+		Description: "Read an image asset and return it as MCP ImageContent so vision-capable agents can see it directly. Path is the wiki-relative asset path as it appears in markdown references.",
+	}, s.downloadImage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "delete_image",
+		Description: "Remove an image asset from the wiki. Pages that still reference the deleted image will have a dangling markdown link until edited — the caller is responsible for cleaning up references. Useful for capture tooling that wants a clean canonical filename across re-runs rather than auto-suffixed duplicates.",
+	}, s.deleteImage)
 }
 
 // --- Tool input types ---
@@ -145,6 +179,14 @@ type registerSyncInput struct {
 	Remote string `json:"remote" jsonschema:"git remote URL, e.g. https://github.com/user/repo.wiki.git"`
 	// Direction is optional. Omitted or empty means bidirectional.
 	Direction string `json:"direction,omitempty" jsonschema:"sync direction: 'bidirectional' (default), 'pull' (mirror remote read-only into wiki), or 'push' (publish wiki to remote, never pulling)"`
+	// LFS, when true, configures the synced clone to track binary
+	// assets through git-lfs. Requires git-lfs on the host. Leave
+	// off for GitHub wikis (which reject LFS pointers) and other
+	// providers that don't support LFS.
+	LFS bool `json:"lfs,omitempty" jsonschema:"if true, route binary assets through git-lfs in the synced clone. Requires git-lfs on the host. Defaults false. Do not enable for GitHub wikis (LFS unsupported)."`
+	// LFSPatterns, when set, overrides the default LFS .gitattributes
+	// patterns (the browser-renderable image set).
+	LFSPatterns []string `json:"lfs_patterns,omitempty" jsonschema:"optional .gitattributes patterns to route through LFS. If LFS=true and this is empty, the default image-format set is used."`
 }
 
 type moveInput struct {
@@ -180,6 +222,15 @@ func (s *Server) getWikiContext(ctx context.Context, _ *mcp.CallToolRequest, _ a
 	return textResult(wctx)
 }
 
+// get_page is implemented in images.go as getPageWithFlags so the
+// image-related flags live next to the rest of the image tooling.
+// The old getPage handler that landed on main is intentionally
+// dropped during this merge: its signature (pagePathInput, no
+// flags) was superseded by getPageWithFlags (getPageInput with the
+// IncludeImages / IncludeImageMetadata flags) in this branch's
+// slice 3 — keeping both would mean two handlers for the same tool
+// name.
+
 func (s *Server) getWikiDigest(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
 	start := time.Now()
 	d, err := s.wiki.Digest(ctx)
@@ -196,17 +247,6 @@ func (s *Server) getWikiDigest(ctx context.Context, _ *mcp.CallToolRequest, _ an
 		slog.Duration("elapsed", time.Since(start)),
 	)
 	return textResult(d)
-}
-
-func (s *Server) getPage(ctx context.Context, _ *mcp.CallToolRequest, input pagePathInput) (*mcp.CallToolResult, any, error) {
-	start := time.Now()
-	page, err := s.wiki.GetPage(ctx, input.Path)
-	if err != nil {
-		slog.Warn("tool.get_page failed", slog.String("page", input.Path), slog.Any("error", err))
-		return nil, nil, err
-	}
-	slog.Info("tool.get_page", slog.String("page", input.Path), slog.Duration("elapsed", time.Since(start)))
-	return textResult(page)
 }
 
 func (s *Server) createPage(ctx context.Context, _ *mcp.CallToolRequest, input createInput) (*mcp.CallToolResult, any, error) {
@@ -354,10 +394,11 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 		direction = config.SyncBidirectional
 	}
 
-	if err := s.sync.RegisterMapping(input.Prefix, input.Remote, direction); err != nil {
+	if err := s.registerSyncMapping(input.Prefix, input.Remote, direction, input.LFS, input.LFSPatterns); err != nil {
 		slog.Error("tool.register_sync failed",
 			slog.String("prefix", input.Prefix),
 			slog.String("direction", string(direction)),
+			slog.Bool("lfs", input.LFS),
 			slog.Any("error", err),
 		)
 		return nil, nil, err
@@ -367,6 +408,7 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 		slog.String("prefix", input.Prefix),
 		slog.String("remote", input.Remote),
 		slog.String("direction", string(direction)),
+		slog.Bool("lfs", input.LFS),
 	)
 
 	msg := fmt.Sprintf("Sync registered: pages under '%s' will sync to %s", input.Prefix, input.Remote)
@@ -378,11 +420,31 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 	default:
 		msg += " (bidirectional)"
 	}
+	if input.LFS {
+		msg += "; binary assets routed through git-lfs"
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: msg},
 		},
 	}, nil, nil
+}
+
+// registerSyncMapping dispatches the registration call to either the
+// LFS-aware variant (when the wired registrar implements it) or the
+// back-compat variant (which silently drops LFS settings). Logs a
+// warning when LFS was requested but the registrar can't honor it
+// so the operator isn't misled about the resulting behavior.
+func (s *Server) registerSyncMapping(prefix, remote string, direction config.SyncDirection, lfs bool, patterns []string) error {
+	if rw, ok := s.sync.(SyncRegistrarWithLFS); ok {
+		return rw.RegisterMappingWithLFS(prefix, remote, direction, lfs, patterns)
+	}
+	if lfs {
+		slog.Warn("register_sync LFS requested but registrar doesn't support it; falling back to non-LFS",
+			slog.String("prefix", prefix),
+			slog.String("remote", remote))
+	}
+	return s.sync.RegisterMapping(prefix, remote, direction)
 }
 
 // topPrefix extracts the top-level prefix from a page path.

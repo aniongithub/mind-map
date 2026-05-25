@@ -176,6 +176,7 @@ func (s *Server) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/restart", s.postRestart)
 	mux.HandleFunc("POST /api/reindex", s.postReindex)
 	mux.HandleFunc("GET /api/sync/status", s.getSyncStatus)
+	s.registerAssets(mux)
 	mux.Handle("/", s.staticHandler())
 }
 

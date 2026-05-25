@@ -139,6 +139,10 @@ type Wiki struct {
 	// against an already-closed DB and logs a spurious warning.
 	closeOnce sync.Once
 	closeErr  error
+	// MaxAssetBytes caps individual asset uploads via UploadAsset.
+	// Zero (the default) means "use defaultMaxAssetBytes" (10 MB).
+	// Set this from the CLI / config layer to override per deployment.
+	MaxAssetBytes int64
 }
 
 // Open opens (or creates) a wiki rooted at the given directory.
@@ -260,9 +264,15 @@ func (w *Wiki) initSchema() error {
 		modified  TEXT NOT NULL DEFAULT ''
 	);
 
+	-- The PRIMARY KEY is (source, target) for back-compat with databases
+	-- migrated from before the kind column existed (see migrate.go). In
+	-- practice (source, target) is unique even across kinds because
+	-- wikilink targets are page paths (no extension) while image targets
+	-- are filesystem paths with extensions — they don't collide.
 	CREATE TABLE IF NOT EXISTS links (
 		source TEXT NOT NULL,
 		target TEXT NOT NULL,
+		kind   TEXT NOT NULL DEFAULT 'link',
 		PRIMARY KEY (source, target)
 	);
 
@@ -304,6 +314,10 @@ func (w *Wiki) initSchema() error {
 
 	if err := w.initStateSchema(); err != nil {
 		return fmt.Errorf("wiki_state schema: %w", err)
+	}
+
+	if err := w.migrate(); err != nil {
+		return fmt.Errorf("migrate: %w", err)
 	}
 
 	// Clean up stale locks (older than 5 minutes) from crashed processes

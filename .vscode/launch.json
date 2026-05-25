@@ -12,12 +12,19 @@
     ],
     "configurations": [
         {
+            // The devcontainer runs with --network host (see
+            // .devcontainer/devcontainer.json), so the in-container
+            // port IS the host port. initializeCommand.sh picks the
+            // value at create time and writes it to
+            // .devcontainer/ports.env; --env-file in runArgs makes
+            // $MIND_MAP_HOST_PORT available in the container's env.
+            // See [[preferences/devcontainer-ports]].
             "name": "mind-map Server",
             "type": "go",
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", "0.0.0.0:4242", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", "0.0.0.0:${env:MIND_MAP_HOST_PORT}", "--webui", "${workspaceFolder}/webui/dist"],
             "preLaunchTask": "build-webui"
         },
         {
@@ -26,7 +33,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", "0.0.0.0:4242", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", "0.0.0.0:${env:MIND_MAP_HOST_PORT}", "--webui", "${workspaceFolder}/webui/dist"],
         },
         {
             "name": "mind-map (stdio)",
@@ -37,12 +44,16 @@
             "args": ["serve", "--stdio"],
         },
         {
+            // Same port the server binds to (host == container under
+            // --network host). The mindMapHostPort input reads
+            // .devcontainer/ports.env so the URL tracks whatever value
+            // initializeCommand picked.
             "name": "WebUI",
             "type": "chrome",
             "request": "launch",
             "browserLaunchLocation": "ui",
             "runtimeExecutable": "stable",
-            "url": "http://localhost:51888",
+            "url": "http://localhost:${input:mindMapHostPort}",
             "webRoot": "${workspaceFolder}/webui",
             "preLaunchTask": "waitForServer",
             "userDataDir": "${workspaceFolder}/.vscode/cache",
@@ -57,6 +68,26 @@
             "request": "launch",
             "mode": "test",
             "program": "${workspaceFolder}/internal/wiki",
+        }
+    ],
+    "inputs": [
+        {
+            // Reads MIND_MAP_HOST_PORT out of .devcontainer/ports.env
+            // every time the WebUI launch is invoked. Evaluated lazily,
+            // so even if the container is rebuilt and the port changes
+            // (because initializeCommand picked something else), the
+            // next launch picks up the new value with no manual edit.
+            //
+            // Requires the augustocdias.tasks-shell-input extension,
+            // which is declared in .devcontainer/devcontainer.json so
+            // contributors get it automatically.
+            "id": "mindMapHostPort",
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "grep ^MIND_MAP_HOST_PORT= ${workspaceFolder}/.devcontainer/ports.env | cut -d= -f2 | tr -d '\\n'",
+                "useSingleResult": true
+            }
         }
     ]
 }

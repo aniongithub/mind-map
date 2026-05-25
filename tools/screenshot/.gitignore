@@ -1,0 +1,6 @@
+# Build / runtime artifacts from running capture.mjs.
+# node_modules/ holds Playwright; captured/ holds the screenshot PNGs.
+# Both are reproducible: `npm install && npm run capture` regenerates them.
+node_modules/
+captured/
+package-lock.json

@@ -376,10 +376,30 @@ export function App() {
             return `[${label}](#/${target})`;
         });
 
+        // Rewrite wiki-local image references to point at the asset
+        // handler. Goldmark image syntax `![alt](path)` lands here
+        // pre-render so marked still parses normally and gets a
+        // well-formed `<img>` tag with the corrected `src`. We touch
+        // only paths the asset handler can serve: external URLs
+        // (http/https/data/mailto/…), in-page anchors (#foo) and
+        // empty destinations are left alone.
+        const withAssets = withLinks.replace(
+            /!\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g,
+            (match, alt: string, dest: string, title: string | undefined) => {
+                if (!isWikiLocalImageRef(dest)) return match;
+                // Strip any leading "./" so we don't end up with
+                // "/assets/./..." which most servers normalize but
+                // looks ugly in DOM inspections.
+                const cleaned = dest.replace(/^\.\//, '');
+                const url = '/assets/' + cleaned.replace(/^\/+/, '');
+                return `![${alt}](${url}${title ?? ''})`;
+            }
+        );
+
         // Extract mermaid blocks before marked processing to prevent HTML escaping
         const mermaidBlocks: Record<string, string> = {};
         let localCounter = 0;
-        const withPlaceholders = withLinks.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
+        const withPlaceholders = withAssets.replace(/```mermaid\s*\n([\s\S]*?)```/g, (_, code) => {
             const id = `mermaid-${++localCounter}`;
             mermaidBlocks[id] = code.trim();
             return `<div class="mermaid" id="${id}">MERMAID_PLACEHOLDER_${id}</div>`;
@@ -394,6 +414,23 @@ export function App() {
 
         return html;
     };
+
+    // isWikiLocalImageRef mirrors the Go-side isWikiLocalRef used by
+    // the indexer (internal/wiki/parse.go): rejects external URLs,
+    // anchor-only refs, and empty destinations. Anything else is a
+    // path the static asset handler can serve.
+    function isWikiLocalImageRef(dest: string): boolean {
+        if (!dest) return false;
+        if (dest.startsWith('#')) return false;
+        // RFC 3986 scheme detection: a ':' before any '/', '?', or
+        // '#' means an absolute URL.
+        for (let i = 0; i < dest.length; i++) {
+            const c = dest[i];
+            if (c === ':') return false;
+            if (c === '/' || c === '?' || c === '#') break;
+        }
+        return true;
+    }
 
     // Wrap each occurrence of any search token in <mark>. Works on parsed
     // DOM (not via regex on raw HTML) so tags and attributes are never

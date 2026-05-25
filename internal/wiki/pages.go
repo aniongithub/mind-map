@@ -194,7 +194,13 @@ func (w *Wiki) UpdatePage(ctx context.Context, pagePath string, content string) 
 	return nil
 }
 
-// DeletePage removes a page from the filesystem and index.
+// DeletePage removes a page from the filesystem and index. Sidecar
+// assets under <page>.assets/ are GC'd against the link index: any file
+// that no longer has a row in `links` (after the page's own rows are
+// removed) is deleted. Cross-referenced assets — those another page
+// still embeds — are kept; the design intentionally has no shared-pool
+// concept, so the file lives where it was originally uploaded even when
+// referenced from elsewhere.
 func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -223,6 +229,21 @@ func (w *Wiki) DeletePage(ctx context.Context, pagePath string) error {
 	// The page is gone; leaving it in recents would point the agent
 	// at a 404. Drop the entry rather than promote it.
 	w.recents.remove(pagePath)
+
+	// Sweep the sidecar after dropping this page's link rows. Any
+	// asset still referenced by another page (kind='image' row with
+	// a different source) is kept; everything else is removed. The
+	// sidecar dir itself is removed if it ends up empty.
+	if err := w.gcSidecarAssets(ctx, pagePath); err != nil {
+		// Non-fatal: the page itself is gone and the index is
+		// consistent. A future gc_assets pass (Slice 2 follow-up)
+		// can mop up.
+		slog.Warn("sidecar gc failed",
+			slog.String("page", pagePath),
+			slog.Any("error", err),
+		)
+	}
+
 	return nil
 }
 
@@ -317,8 +338,37 @@ func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string, opts MoveO
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 
-	if err := os.Rename(fromAbs, toAbs); err != nil {
-		return fmt.Errorf("rename page file: %w", err)
+	// Sidecar handling: before we destroy the source page's link rows,
+	// snapshot its image references so splitSidecarOnMove can decide
+	// which assets travel with the page and which stay behind for
+	// other referencers. We read the body once here and pass it
+	// through to be rewritten in place — that way the file ends up at
+	// the new location with image paths already pointing at the new
+	// sidecar (for exclusive assets) and unchanged for shared ones.
+	oldImages, err := w.imageRefsFor(ctx, from)
+	if err != nil {
+		return fmt.Errorf("snapshot image refs: %w", err)
+	}
+	body, err := os.ReadFile(fromAbs)
+	if err != nil {
+		return fmt.Errorf("read source body: %w", err)
+	}
+	rewritten, err := w.splitSidecarOnMove(ctx, from, to, body, oldImages)
+	if err != nil {
+		return fmt.Errorf("split sidecar on move: %w", err)
+	}
+
+	if err := os.WriteFile(toAbs, rewritten, 0o644); err != nil {
+		return fmt.Errorf("write destination: %w", err)
+	}
+	if err := os.Remove(fromAbs); err != nil && !os.IsNotExist(err) {
+		// Best-effort: the destination is already in place and the
+		// indexer will reconcile. Leaving the source on disk would
+		// confuse the next reindex into thinking we have a
+		// duplicate, but a follow-up Reindex picks the newer mtime.
+		slog.Warn("move: remove source after copy failed",
+			slog.String("from", from), slog.Any("error", err),
+		)
 	}
 
 	if err := w.removePageIndex(ctx, from); err != nil {
@@ -327,6 +377,15 @@ func (w *Wiki) MovePage(ctx context.Context, fromPath, toPath string, opts MoveO
 	}
 	if err := w.indexPage(ctx, to); err != nil {
 		return fmt.Errorf("index new page: %w", err)
+	}
+
+	// GC any remaining files in the old sidecar. If everything moved,
+	// the dir is gone; if shared assets remained, the dir survives
+	// with just them.
+	if err := w.gcSidecarAssets(ctx, from); err != nil {
+		slog.Warn("move: sidecar gc failed",
+			slog.String("from", from), slog.Any("error", err),
+		)
 	}
 
 	// Treat a move as one continuous "active use" rather than dropping
@@ -398,14 +457,16 @@ type Link struct {
 	Target string `json:"target"`
 }
 
-// AllLinks returns every wikilink edge in the index. Used by the graph
-// view to render reference edges without a per-page round-trip.
+// AllLinks returns every wikilink edge in the index. Image references
+// (kind='image') are excluded — those have a separate query path for the
+// asset lifecycle code. Used by the graph view to render reference edges
+// without a per-page round-trip.
 func (w *Wiki) AllLinks(ctx context.Context) ([]Link, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	rows, err := w.db.QueryContext(ctx, "SELECT source, target FROM links")
+	rows, err := w.db.QueryContext(ctx, "SELECT source, target FROM links WHERE kind = 'link'")
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +582,7 @@ func (w *Wiki) releaseLock(pagePath string) {
 // --- internal helpers ---
 
 func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) {
-	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ?", pagePath)
+	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ? AND kind = 'link'", pagePath)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +599,7 @@ func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) 
 }
 
 func (w *Wiki) getBacklinks(ctx context.Context, pagePath string) ([]string, error) {
-	rows, err := w.db.QueryContext(ctx, "SELECT source FROM links WHERE target = ?", pagePath)
+	rows, err := w.db.QueryContext(ctx, "SELECT source FROM links WHERE target = ? AND kind = 'link'", pagePath)
 	if err != nil {
 		return nil, err
 	}
@@ -552,6 +613,48 @@ func (w *Wiki) getBacklinks(ctx context.Context, pagePath string) ([]string, err
 		}
 	}
 	return backlinks, nil
+}
+
+// imageRefsFor returns the asset paths a page currently references in
+// the index (kind='image' rows where source = pagePath). Order is
+// unspecified; callers that care should sort. Used by MovePage to
+// snapshot pre-move state before the source's link rows are deleted.
+func (w *Wiki) imageRefsFor(ctx context.Context, pagePath string) ([]string, error) {
+	rows, err := w.db.QueryContext(ctx,
+		"SELECT target FROM links WHERE source = ? AND kind = 'image'",
+		pagePath,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var images []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil {
+			images = append(images, t)
+		}
+	}
+	return images, nil
+}
+
+// ImageRefsForPage is the exported variant of imageRefsFor used by
+// MCP / HTTP handlers that need to enumerate a page's image
+// references. The page path is normalized first (same rules as
+// GetPage); an empty result is returned for an unknown page rather
+// than an error, since "no images referenced" and "page doesn't
+// exist" are both legitimate empty cases the caller will usually
+// treat the same way.
+func (w *Wiki) ImageRefsForPage(ctx context.Context, pagePath string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizePagePath(pagePath)
+	if err != nil {
+		return nil, err
+	}
+	return w.imageRefsFor(ctx, normalized)
 }
 
 func (w *Wiki) topLevelDirs() []string {
