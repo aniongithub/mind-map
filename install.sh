@@ -366,8 +366,24 @@ if [ -d "${HOME}/.cursor" ]; then
   configure_mcp_client "${HOME}/.cursor/mcp.json" "Cursor"
 fi
 
-# Claude Code
-configure_mcp_client "${HOME}/.claude.json" "Claude Code"
+# Claude Code (CLI). Gate on ~/.claude existing so we don't create a stray
+# config file for users who don't actually have Claude Code installed.
+if [ -d "${HOME}/.claude" ] || [ -f "${HOME}/.claude.json" ]; then
+  configure_mcp_client "${HOME}/.claude.json" "Claude Code"
+fi
+
+# Claude Desktop (separate product from Claude Code). Uses the same
+# "mcpServers" shape but lives at a different path, and only on macOS/Windows
+# — Anthropic does not ship a Linux build, so this branch is macOS-only here.
+# We gate on the Claude Desktop app-support directory existing rather than
+# auto-creating it: users who haven't installed Claude Desktop shouldn't get
+# a phantom config file under ~/Library/Application Support/Claude.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  CLAUDE_DESKTOP_DIR="${HOME}/Library/Application Support/Claude"
+  if [ -d "$CLAUDE_DESKTOP_DIR" ]; then
+    configure_mcp_client "${CLAUDE_DESKTOP_DIR}/claude_desktop_config.json" "Claude Desktop"
+  fi
+fi
 
 # OpenCode (https://opencode.ai). The studio reads opencode.json first, then
 # opencode.jsonc. If neither exists but the binary is on PATH or the config

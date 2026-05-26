@@ -310,8 +310,21 @@ function Set-McpConfig {
     }
 }
 
-# Claude Code
-Set-McpConfig "$env:USERPROFILE\.claude.json" "Claude Code"
+# Claude Code (CLI). Gate on .claude existing so we don't create a stray
+# config file for users who don't actually have Claude Code installed.
+if ((Test-Path "$env:USERPROFILE\.claude") -or (Test-Path "$env:USERPROFILE\.claude.json")) {
+    Set-McpConfig "$env:USERPROFILE\.claude.json" "Claude Code"
+}
+
+# Claude Desktop (separate product from Claude Code). Same "mcpServers" shape
+# as Claude Code / Copilot / VS Code, different config path. We gate on the
+# %APPDATA%\Claude directory existing — that's where the desktop app stores
+# its state — so we don't drop a phantom config for users who haven't
+# installed Claude Desktop.
+$claudeDesktopDir = "$env:APPDATA\Claude"
+if (Test-Path $claudeDesktopDir) {
+    Set-McpConfig "$claudeDesktopDir\claude_desktop_config.json" "Claude Desktop"
+}
 
 # GitHub Copilot (if .copilot dir exists)
 if (Test-Path "$env:USERPROFILE\.copilot") {
