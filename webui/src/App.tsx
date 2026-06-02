@@ -5,6 +5,9 @@ import { PageBrowser } from './PageBrowser';
 import { GraphView } from './GraphView';
 import { searchTokens, searchRegex, Highlighted } from './search';
 import { TagInput } from './TagInput';
+import { ExportPanel } from './ExportPanel';
+import { ShareIcon } from './ShareIcon';
+import { ShareSettings } from './ShareSettings';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 
@@ -65,6 +68,7 @@ export function App() {
     const [editContent, setEditContent] = useState('');
     const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('mm-search-query') || '');
     const [showSettings, setShowSettings] = useState(false);
+    const [showExport, setShowExport] = useState(false);
     const [settings, setSettings] = useState<Settings | null>(null);
     const [configPath, setConfigPath] = useState('');
     const [settingsDirty, setSettingsDirty] = useState(false);
@@ -296,6 +300,7 @@ export function App() {
             setSettings(s);
             setConfigPath(p);
             setShowSettings(true);
+            setShowExport(false);
             setSettingsDirty(false);
             setSettingsSaved(false);
             setCurrent(null);
@@ -566,7 +571,12 @@ export function App() {
 
             {/* Main */}
             <div class="main">
-                {showSettings && settings ? (
+                {showExport && current ? (
+                    <ExportPanel
+                        page={current.path}
+                        onClose={() => setShowExport(false)}
+                    />
+                ) : showSettings && settings ? (
                     <>
                         <div class="settings-title">Settings</div>
                         <div class="settings-container">
@@ -735,6 +745,8 @@ export function App() {
                                 </div>
                             </div>
 
+                            <ShareSettings />
+
                             <div class="settings-actions">
                                 <button class="btn primary" onClick={handleSettingsSave} disabled={!settingsDirty}>
                                     Save
@@ -756,9 +768,14 @@ export function App() {
                             <div class="page-title">
                                 <Highlighted text={current.title} query={searchQuery} />
                                 {!editing && (
-                                    <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
-                                    </button>
+                                    <>
+                                        <button class="edit-icon-btn" onClick={handleEdit} title="Edit page">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M22 5.90244L18.0976 2L15.3935 4.70407L19.2959 8.60651L22 5.90244Z"/><path d="M6 18L10.2927 17.6098L17.6797 10.2228L13.7772 6.32032L6.39024 13.7073L6 18Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M15 22H2V20H15V22Z"/></svg>
+                                        </button>
+                                        <button class="edit-icon-btn" onClick={() => { setShowExport(true); setShowSettings(false); }} title="Export subtree">
+                                            <ShareIcon size={20} />
+                                        </button>
+                                    </>
                                 )}
                             </div>
                             <div class="page-meta">

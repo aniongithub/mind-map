@@ -84,7 +84,7 @@ The web UI is a static Preact app served by `mind-map serve` over HTTP. It uses 
 
 Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wiki` by default). Multiple stdio processes can safely share the same wiki via SQLite page locking.
 
-## MCP Tools (11 total)
+## MCP Tools (12 total)
 
 | Tool | Description |
 |------|-------------|
@@ -100,6 +100,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | `get_backlinks` | Get all pages that link to a given page |
 | `register_sync` | Register a wiki path prefix to sync with a git remote |
 | `reindex_wiki` | Force a reindex pass against on-disk markdown (rarely needed; useful after edits made outside the wiki API) |
+| `export_pages` | Export a page (and linked pages up to N hops) as zip or PDF |
 
 ## Wiki Features
 
@@ -110,6 +111,50 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 - **Full-text search**: SQLite FTS5 with ranked results and snippets
 - **Multi-process safe**: SQLite page locking for concurrent agent access
 - **Git sync**: sync wiki pages to GitHub repo wikis via configurable mappings
+- **Export / Share**: export pages as zip or PDF — see below
+
+## Export & Share
+
+Export one or more wiki pages for sharing outside the wiki. The system follows **wikilinks** from a starting page (BFS traversal) to collect a self-contained set of pages with no broken links.
+
+### Depth control
+
+| Depth | Meaning |
+|-------|---------|
+| `0` | Just the selected page |
+| `1` | The page + all pages it links to |
+| `N` | N hops of outgoing links |
+| `-1` | Unlimited — follow all reachable links |
+
+### Formats
+
+Export is **pluggable** — formats register themselves at startup:
+
+| Format | Description | Requirements |
+|--------|-------------|--------------|
+| **zip** | Archive of markdown files + assets | None |
+| **pdf** | Multi-page PDF with table of contents | Chrome, Edge, or Chromium on `$PATH` |
+
+PDF export uses [chromedp](https://github.com/chromedp/chromedp) to render markdown → HTML → PDF via a headless browser. It includes a clickable TOC, embedded images, and a print-friendly stylesheet. The PDF sharer only registers if a supported browser is detected — no browser, no PDF option.
+
+### Using export
+
+**Web UI**: Click the share icon in the page header → pick depth and format → download.
+
+**REST API**:
+```
+GET /api/export?format=zip&page=projects/my-project&depth=1
+GET /api/export/formats   # list available formats with settings schemas
+```
+
+**MCP tool**:
+```
+export_pages(format: "pdf", page: "architecture/auth", depth: -1)
+```
+
+### Adding new formats
+
+Implement the `Sharer` interface in `internal/share/` and call `Register()` in an `init()` function. The format automatically appears in the UI, REST API, and MCP tool.
 
 ## Web UI
 
@@ -119,9 +164,59 @@ The built-in web UI is a lightning-fast, Metro-inspired, chromeless Preact app:
 - Markdown rendering with wikilinks as clickable links
 - Backlinks section on every page
 - Edit mode with raw markdown editor
+- Export / share panel for zip and PDF export
+- Interactive graph view of the wiki link structure
 - Dark / light theme toggle
 
 The web UI speaks the same language as the wiki engine. If an agent creates a page via stdio, it appears in the browser. If you edit in the browser, the agent sees the change on its next read.
+
+### Page view
+
+<p align="center">
+  <img src="docs/screenshots/page-view.png" alt="Page view" width="720">
+</p>
+
+### Dark theme
+
+<p align="center">
+  <img src="docs/screenshots/page-view-dark.png" alt="Page view (dark theme)" width="720">
+</p>
+
+### Search
+
+<p align="center">
+  <img src="docs/screenshots/search.png" alt="Search" width="720">
+</p>
+
+### Edit mode
+
+<p align="center">
+  <img src="docs/screenshots/edit-mode.png" alt="Edit mode" width="720">
+</p>
+
+### Export panel
+
+<p align="center">
+  <img src="docs/screenshots/export-panel.png" alt="Export panel" width="720">
+</p>
+
+### Graph view
+
+<p align="center">
+  <img src="docs/screenshots/graph-view.png" alt="Graph view" width="720">
+</p>
+
+### Backlinks
+
+<p align="center">
+  <img src="docs/screenshots/backlinks.png" alt="Backlinks" width="720">
+</p>
+
+### Settings
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Settings" width="720">
+</p>
 
 ## Service Management
 

@@ -902,3 +902,116 @@ mark {
     font-size: 13px;
     padding: 4px 2px;
 }
+
+/* Export panel — format picker and per-plugin settings */
+.export-format-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.export-format-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+}
+
+.export-format-option:hover {
+    border-color: var(--accent);
+}
+
+.export-format-option input[type="radio"] {
+    margin-top: 3px;
+}
+
+.export-format-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.export-format-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--fg);
+}
+
+.export-format-desc {
+    font-size: 12px;
+    color: var(--fg-dim);
+}
+
+.settings-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 12px;
+}
+
+/* Share extension settings (VS Code-like collapsible per-plugin sections) */
+.share-extension {
+    border: 1px solid var(--border);
+    margin-top: 8px;
+}
+
+.share-extension-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    cursor: pointer;
+    text-align: left;
+    font-size: 13px;
+}
+
+.share-extension-header:hover {
+    background: var(--bg-hover);
+}
+
+.share-extension-chevron {
+    font-size: 11px;
+    color: var(--fg-dim);
+    width: 12px;
+}
+
+.share-extension-name {
+    font-weight: 600;
+}
+
+.share-extension-desc {
+    color: var(--fg-dim);
+    font-size: 12px;
+}
+
+.share-extension-fields {
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.export-depth-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.export-depth-input {
+    width: 48px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    text-align: center;
+}
+
+.export-depth-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}

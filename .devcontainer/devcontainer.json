@@ -34,7 +34,7 @@
   // [[preferences/devcontainer-ports]] for the full rationale and the
   // consumer recipes (launch.json, tasks.json, host scripts).
   "initializeCommand": ".devcontainer/initializeCommand.sh",
-  "postCreateCommand": "go version && node --version",
+  "postCreateCommand": "git config --global --add safe.directory /workspaces/mind-map && go version && node --version && { CHROME=$(find ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) && [ -n \"$CHROME\" ] && sudo ln -sf \"$CHROME\" /usr/local/bin/chromium || true; }",
   "postAttachCommand": "npm install --prefix webui",
   "customizations": {
     "vscode": {

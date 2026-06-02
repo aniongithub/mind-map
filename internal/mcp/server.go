@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/aniongithub/mind-map/internal/config"
+	"github.com/aniongithub/mind-map/internal/share"
 	"github.com/aniongithub/mind-map/internal/wiki"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -147,6 +149,11 @@ func (s *Server) registerTools() {
 		Name:        "delete_image",
 		Description: "Remove an image asset from the wiki. Pages that still reference the deleted image will have a dangling markdown link until edited — the caller is responsible for cleaning up references. Useful for capture tooling that wants a clean canonical filename across re-runs rather than auto-suffixed duplicates.",
 	}, s.deleteImage)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "export_pages",
+		Description: "Export wiki pages as a downloadable file. Starts from a given page and follows wikilinks to the specified depth. Returns the path to the exported file on disk. Depth: -1 = all reachable pages, 0 = just this page, 1 = page + its direct links, etc.",
+	}, s.exportPages)
 }
 
 // --- Tool input types ---
@@ -196,6 +203,13 @@ type moveInput struct {
 	// the long-standing safety contract: a move never destroys data
 	// unless the caller (after asking the user) explicitly says so.
 	Overwrite bool `json:"overwrite,omitempty" jsonschema:"set true to replace an existing destination page; ask the user for explicit confirmation first since the destination's content will be lost"`
+}
+
+type exportInput struct {
+	Format   string         `json:"format,omitempty" jsonschema:"export format name (default: 'zip'). Use GET /api/export/formats to list available formats."`
+	Page     string         `json:"page" jsonschema:"starting page path for link-graph traversal"`
+	Depth    int            `json:"depth,omitempty" jsonschema:"link-follow depth: -1 = unlimited, 0 = just this page, 1 = page + its links, etc."`
+	Settings map[string]any `json:"settings,omitempty" jsonschema:"plugin-specific settings as key-value pairs"`
 }
 
 // --- Tool handlers ---
@@ -474,4 +488,112 @@ func (s *Server) reindexWiki(ctx context.Context, _ *mcp.CallToolRequest, _ any)
 		slog.Duration("elapsed", time.Since(start)),
 	)
 	return textResult(stats)
+}
+
+func (s *Server) exportPages(ctx context.Context, _ *mcp.CallToolRequest, input exportInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+
+	format := input.Format
+	if format == "" {
+		format = "zip"
+	}
+
+	sharer := share.Get(format)
+	if sharer == nil {
+		return nil, nil, fmt.Errorf("unknown export format %q; available: %v", format, formatNames())
+	}
+
+	exportPages, err := s.wiki.ExportPages(ctx, input.Page, input.Depth)
+	if err != nil {
+		slog.Error("tool.export_pages gather failed", slog.Any("error", err))
+		return nil, nil, err
+	}
+
+	if len(exportPages) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "No pages found matching the given page/depth."},
+			},
+		}, nil, nil
+	}
+
+	// Convert to share.Page
+	pages := make([]share.Page, len(exportPages))
+	for i, ep := range exportPages {
+		pages[i] = share.Page{
+			Path:        ep.Path,
+			Title:       ep.Title,
+			Body:        ep.Body,
+			Frontmatter: ep.Frontmatter,
+			ModifiedAt:  ep.ModifiedAt,
+			ImageRefs:   ep.ImageRefs,
+		}
+	}
+
+	cfg := share.ShareConfig{
+		Format:   format,
+		Page:     input.Page,
+		Depth:    input.Depth,
+		Settings: input.Settings,
+	}
+
+	// Write to a temp file
+	tmpFile, err := os.CreateTemp("", "mind-map-export-*"+sharer.FileExtension())
+	if err != nil {
+		return nil, nil, fmt.Errorf("create temp file: %w", err)
+	}
+	defer tmpFile.Close()
+
+	req := share.ExportRequest{
+		Config: cfg,
+		Pages:  pages,
+		Assets: &mcpAssetReader{wiki: s.wiki},
+	}
+
+	if err := sharer.Export(ctx, tmpFile, req); err != nil {
+		os.Remove(tmpFile.Name())
+		return nil, nil, fmt.Errorf("export failed: %w", err)
+	}
+
+	info, _ := tmpFile.Stat()
+	var sizeBytes int64
+	if info != nil {
+		sizeBytes = info.Size()
+	}
+
+	slog.Info("tool.export_pages",
+		slog.String("format", format),
+		slog.String("page", input.Page),
+		slog.Int("depth", input.Depth),
+		slog.Int("pages", len(pages)),
+		slog.Int64("size_bytes", sizeBytes),
+		slog.Duration("elapsed", time.Since(start)),
+	)
+
+	result := map[string]any{
+		"path":       tmpFile.Name(),
+		"format":     format,
+		"pages":      len(pages),
+		"size_bytes": sizeBytes,
+	}
+	return textResult(result)
+}
+
+// mcpAssetReader adapts the wiki to the share.AssetReader interface for MCP.
+type mcpAssetReader struct {
+	wiki *wiki.Wiki
+}
+
+func (r *mcpAssetReader) ReadAsset(ctx context.Context, path string) ([]byte, string, error) {
+	return r.wiki.ReadAsset(ctx, path)
+}
+
+// formatNames returns the names of all registered share formats.
+func formatNames() []string {
+	formats := share.Formats()
+	names := make([]string, len(formats))
+	for i, f := range formats {
+		names[i] = f.Name
+	}
+	return names
 }
