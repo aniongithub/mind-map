@@ -10,6 +10,7 @@
 webui/dist/*
 !webui/dist/.gitkeep
 webui/node_modules/
+tools/node_modules/
 
 # VS Code cache
 .vscode/cache/

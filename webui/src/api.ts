@@ -119,6 +119,51 @@ class APIClient {
         }
         return res.json();
     }
+
+    /**
+     * Fetch available export formats and their settings schemas.
+     */
+    async exportFormats(): Promise<ExportFormat[]> {
+        const res = await fetch('/api/export/formats');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) || [];
+    }
+
+    /**
+     * Trigger a file download for the given export configuration.
+     * Opens the export URL in a new tab/download.
+     */
+    exportUrl(format: string, page: string, depth?: number, settings?: Record<string, any>): string {
+        const params = new URLSearchParams();
+        params.set('format', format);
+        params.set('page', page);
+        if (depth !== undefined) params.set('depth', String(depth));
+        if (settings) {
+            for (const [key, value] of Object.entries(settings)) {
+                params.set(key, String(value));
+            }
+        }
+        return `/api/export?${params.toString()}`;
+    }
+}
+
+export interface ExportFormat {
+    name: string;
+    description: string;
+    content_type: string;
+    extension: string;
+    settings: {
+        fields: ExportSettingsField[];
+    };
+}
+
+export interface ExportSettingsField {
+    key: string;
+    label: string;
+    description?: string;
+    type: 'bool' | 'int' | 'string' | 'enum';
+    default: any;
+    enum?: string[];
 }
 
 export interface Link {
