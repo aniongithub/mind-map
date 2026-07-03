@@ -8,7 +8,11 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -77,11 +81,21 @@ func (p *PDFSharer) Export(ctx context.Context, w io.Writer, req ExportRequest) 
 	includeAssets := SettingBool(req.Config, "include_assets", true)
 	pageSize := SettingString(req.Config, "page_size", "A4")
 
+	// Detect mermaid blocks in any page and load mermaid JS if needed
+	hasMermaid := pagesHaveMermaid(req.Pages)
+	var mermaidJS []byte
+	if hasMermaid {
+		mermaidJS = findMermaidJS()
+		if mermaidJS == nil {
+			hasMermaid = false // degrade gracefully — render code blocks as-is
+		}
+	}
+
 	// Render pages to HTML
-	htmlDoc := renderHTMLDocument(req.Pages, req.Assets, ctx, includeTOC, includeAssets)
+	htmlDoc := renderHTMLDocument(req.Pages, req.Assets, ctx, includeTOC, includeAssets, hasMermaid)
 
 	// Convert to PDF via headless browser
-	pdfBytes, err := htmlToPDF(ctx, browserPath, htmlDoc, pageSize)
+	pdfBytes, err := htmlToPDF(ctx, browserPath, htmlDoc, pageSize, mermaidJS)
 	if err != nil {
 		return fmt.Errorf("PDF generation failed: %w", err)
 	}
@@ -91,13 +105,43 @@ func (p *PDFSharer) Export(ctx context.Context, w io.Writer, req ExportRequest) 
 }
 
 // renderHTMLDocument builds a complete HTML document from the exported pages.
-func renderHTMLDocument(pages []Page, assets AssetReader, ctx context.Context, includeTOC, includeAssets bool) string {
+// If hasMermaid is true, includes a script tag that loads mermaid from /mermaid.min.js
+// (served by the local HTTP server in htmlToPDF).
+func renderHTMLDocument(pages []Page, assets AssetReader, ctx context.Context, includeTOC, includeAssets, hasMermaid bool) string {
 	var buf strings.Builder
 
 	buf.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8">`)
 	buf.WriteString(`<style>`)
 	buf.WriteString(pdfCSS)
-	buf.WriteString(`</style></head><body>`)
+	buf.WriteString(`</style>`)
+	if hasMermaid {
+		// Load mermaid from local server, then render code blocks to SVG
+		buf.WriteString(`<script src="/mermaid.min.js"></script>`)
+		buf.WriteString(`<script>`)
+		buf.WriteString(`mermaid.initialize({ startOnLoad: false, theme: 'default' });`)
+		buf.WriteString(`window.addEventListener('DOMContentLoaded', async function() {`)
+		buf.WriteString(`  var nodes = document.querySelectorAll('code.language-mermaid');`)
+		buf.WriteString(`  for (var i = 0; i < nodes.length; i++) {`)
+		buf.WriteString(`    var pre = nodes[i].parentElement;`)
+		buf.WriteString(`    var container = document.createElement('div');`)
+		buf.WriteString(`    container.className = 'mermaid';`)
+		buf.WriteString(`    container.textContent = nodes[i].textContent;`)
+		buf.WriteString(`    pre.replaceWith(container);`)
+		buf.WriteString(`  }`)
+		buf.WriteString(`  var mermaidNodes = document.querySelectorAll('.mermaid');`)
+		buf.WriteString(`  if (mermaidNodes.length > 0) {`)
+		buf.WriteString(`    await mermaid.run({ nodes: mermaidNodes });`)
+		buf.WriteString(`  }`)
+		buf.WriteString(`  document.body.setAttribute('data-mermaid-done', 'true');`)
+		buf.WriteString(`});`)
+		buf.WriteString(`</script>`)
+	}
+	buf.WriteString(`</head><body>`)
+
+	// If no mermaid, immediately mark done for the wait loop
+	if !hasMermaid {
+		buf.WriteString(`<script>document.body.setAttribute('data-mermaid-done','true');</script>`)
+	}
 
 	// Table of contents
 	if includeTOC && len(pages) > 1 {
@@ -172,8 +216,74 @@ func embedImages(body string, imageRefs []string, assets AssetReader, ctx contex
 	return body
 }
 
+// pagesHaveMermaid returns true if any page body contains a mermaid fenced code block.
+func pagesHaveMermaid(pages []Page) bool {
+	for _, p := range pages {
+		if strings.Contains(p.Body, "```mermaid") {
+			return true
+		}
+	}
+	return false
+}
+
+// findMermaidJS locates and reads the mermaid.min.js bundle.
+// It checks common locations relative to the working directory and executable.
+func findMermaidJS() []byte {
+	candidates := []string{
+		// Development: relative to project root (cwd)
+		"webui/node_modules/mermaid/dist/mermaid.min.js",
+		// Two levels up from internal/share/ (tests run from package dir)
+		"../../webui/node_modules/mermaid/dist/mermaid.min.js",
+	}
+
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate)
+		if err == nil {
+			return data
+		}
+	}
+
+	// Try relative to the executable (production: mermaid.min.js next to binary)
+	if exePath, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exePath)
+		for _, rel := range []string{
+			filepath.Join(dir, "mermaid.min.js"),
+			filepath.Join(dir, "webui", "node_modules", "mermaid", "dist", "mermaid.min.js"),
+		} {
+			if data, err := os.ReadFile(rel); err == nil {
+				return data
+			}
+		}
+	}
+
+	return nil
+}
+
 // htmlToPDF uses chromedp to render HTML to PDF.
-func htmlToPDF(ctx context.Context, browserPath, htmlContent, pageSize string) ([]byte, error) {
+func htmlToPDF(ctx context.Context, browserPath, htmlContent, pageSize string, mermaidJS []byte) ([]byte, error) {
+	// Start a local HTTP server to serve the HTML content.
+	// This gives the page a proper origin so scripts and local resources work.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(htmlContent))
+	})
+	if mermaidJS != nil {
+		mux.HandleFunc("/mermaid.min.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript")
+			w.Write(mermaidJS)
+		})
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("failed to start local server: %w", err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(listener)
+	defer srv.Close()
+	defer listener.Close()
+	pageURL := fmt.Sprintf("http://127.0.0.1:%d/", listener.Addr().(*net.TCPAddr).Port)
+
 	// Create a context with the browser path
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(browserPath),
@@ -193,14 +303,13 @@ func htmlToPDF(ctx context.Context, browserPath, htmlContent, pageSize string) (
 
 	// Navigate to the HTML content and print to PDF
 	var pdfBuf []byte
-	err := chromedp.Run(taskCtx,
-		chromedp.Navigate("about:blank"),
+	err = chromedp.Run(taskCtx,
+		chromedp.Navigate(pageURL),
+		// Wait for Mermaid diagrams to finish rendering.
+		// The mermaid init script sets data-mermaid-done="true" on <body>
+		// after all diagrams render (or on error). Poll until it appears.
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			frameTree, err := page.GetFrameTree().Do(ctx)
-			if err != nil {
-				return err
-			}
-			return page.SetDocumentContent(frameTree.Frame.ID, htmlContent).Do(ctx)
+			return chromedp.Poll(`document.body && document.body.getAttribute('data-mermaid-done') === 'true'`, nil, chromedp.WithPollingInterval(100*time.Millisecond)).Do(ctx)
 		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			paperWidth, paperHeight := paperDimensions(pageSize)
