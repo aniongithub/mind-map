@@ -427,11 +427,26 @@ func (s *Server) allLinks(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, links)
 }
 
+// redactedToken is the placeholder the settings API returns in place of
+// a stored sync token. A GET never exposes the real token; a PUT that
+// sends this sentinel back means "keep the existing token unchanged".
+const redactedToken = "********"
+
 func (s *Server) getSettings(rw http.ResponseWriter, r *http.Request) {
 	current, err := config.Load(s.deps.CfgPath)
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Redact tokens so the browser never receives raw credentials.
+	// config.Load returns a fresh struct, so mutating it here is safe.
+	if current.Sync.Token != "" {
+		current.Sync.Token = redactedToken
+	}
+	for i := range current.Sync.Mappings {
+		if current.Sync.Mappings[i].Token != "" {
+			current.Sync.Mappings[i].Token = redactedToken
+		}
 	}
 	writeJSON(rw, current)
 }
@@ -447,6 +462,28 @@ func (s *Server) putSettings(rw http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &incoming); err != nil {
 		http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Restore any redacted tokens from the on-disk config so a settings
+	// save that echoes back the mask preserves the stored credential
+	// instead of overwriting it with the placeholder. An empty token is
+	// left empty (an explicit clear); a real new value is taken as-is.
+	if existing, err := config.Load(s.deps.CfgPath); err == nil {
+		if incoming.Sync.Token == redactedToken {
+			incoming.Sync.Token = existing.Sync.Token
+		}
+		for i := range incoming.Sync.Mappings {
+			if incoming.Sync.Mappings[i].Token != redactedToken {
+				continue
+			}
+			incoming.Sync.Mappings[i].Token = "" // default: no prior match
+			for _, em := range existing.Sync.Mappings {
+				if em.Prefix == incoming.Sync.Mappings[i].Prefix {
+					incoming.Sync.Mappings[i].Token = em.Token
+					break
+				}
+			}
+		}
 	}
 
 	if incoming.Sync.Enabled && incoming.Sync.Default == "" && len(incoming.Sync.Mappings) == 0 {
@@ -468,6 +505,16 @@ func (s *Server) putSettings(rw http.ResponseWriter, r *http.Request) {
 	s.applyConfig(&incoming)
 
 	slog.Info("settings saved", slog.String("path", s.deps.CfgPath))
+
+	// Redact tokens in the echoed response, mirroring getSettings.
+	if incoming.Sync.Token != "" {
+		incoming.Sync.Token = redactedToken
+	}
+	for i := range incoming.Sync.Mappings {
+		if incoming.Sync.Mappings[i].Token != "" {
+			incoming.Sync.Mappings[i].Token = redactedToken
+		}
+	}
 	writeJSON(rw, &incoming)
 }
 

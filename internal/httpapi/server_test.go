@@ -405,3 +405,90 @@ func TestGetDigest(t *testing.T) {
 		t.Errorf("recents missing topics/sqlite: %v", d.Recents)
 	}
 }
+
+// TestSettingsTokenRedaction verifies the settings API never echoes a raw
+// sync token, that re-saving the redacted placeholder preserves the stored
+// token, that a new value replaces it, and that an empty value clears it.
+func TestSettingsTokenRedaction(t *testing.T) {
+	dir := t.TempDir()
+	w, err := wiki.Open(dir)
+	if err != nil {
+		t.Fatalf("open wiki: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+	cfgPath := filepath.Join(dir, "config.json")
+	h := New(Deps{
+		Wiki:       w,
+		CfgPath:    cfgPath,
+		Cfg:        config.DefaultConfig(),
+		GetVersion: func() string { return "test" },
+		StopCh:     make(chan struct{}),
+	})
+
+	const secret = "ghp_realtoken_abc123"
+
+	// 1. PUT a real token.
+	rec := doJSON(t, h, "PUT", "/api/settings", map[string]any{
+		"sync": map[string]any{"enabled": true, "default": "https://example.com/w.git", "token": secret},
+	})
+	if rec.Code != 200 {
+		t.Fatalf("put token: %d %s", rec.Code, rec.Body.String())
+	}
+	// The PUT response must already be redacted.
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("PUT response leaked the raw token: %s", rec.Body.String())
+	}
+
+	// On disk, the real token must be persisted.
+	onDisk, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if onDisk.Sync.Token != secret {
+		t.Fatalf("token not persisted to disk: %q", onDisk.Sync.Token)
+	}
+
+	// 2. GET must return the mask, never the raw token.
+	rec = doJSON(t, h, "GET", "/api/settings", nil)
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("GET leaked the raw token: %s", rec.Body.String())
+	}
+	var got config.Config
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Sync.Token != redactedToken {
+		t.Fatalf("GET token = %q, want mask %q", got.Sync.Token, redactedToken)
+	}
+
+	// 3. Re-saving the mask preserves the stored token.
+	rec = doJSON(t, h, "PUT", "/api/settings", map[string]any{
+		"sync": map[string]any{"enabled": true, "default": "https://example.com/w.git", "token": redactedToken},
+	})
+	if rec.Code != 200 {
+		t.Fatalf("put mask: %d %s", rec.Code, rec.Body.String())
+	}
+	onDisk, _ = config.Load(cfgPath)
+	if onDisk.Sync.Token != secret {
+		t.Fatalf("mask save did not preserve token: %q", onDisk.Sync.Token)
+	}
+
+	// 4. A new value replaces it.
+	const rotated = "ghp_rotated_xyz789"
+	doJSON(t, h, "PUT", "/api/settings", map[string]any{
+		"sync": map[string]any{"enabled": true, "default": "https://example.com/w.git", "token": rotated},
+	})
+	onDisk, _ = config.Load(cfgPath)
+	if onDisk.Sync.Token != rotated {
+		t.Fatalf("token not rotated: %q", onDisk.Sync.Token)
+	}
+
+	// 5. An empty value clears it.
+	doJSON(t, h, "PUT", "/api/settings", map[string]any{
+		"sync": map[string]any{"enabled": true, "default": "https://example.com/w.git", "token": ""},
+	})
+	onDisk, _ = config.Load(cfgPath)
+	if onDisk.Sync.Token != "" {
+		t.Fatalf("empty token did not clear stored token: %q", onDisk.Sync.Token)
+	}
+}

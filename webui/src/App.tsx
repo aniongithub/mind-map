@@ -16,8 +16,28 @@ mermaid.initialize({ startOnLoad: false, theme: 'default' });
 interface SyncSettings {
     enabled: boolean;
     default: string;
+    // token is write-mostly: the server returns a redacted placeholder
+    // ("********") when a token is stored and never the real value.
+    // Sending the placeholder back preserves it; sending "" clears it.
+    token?: string;
     interval: string;
-    mappings?: { prefix: string; remote: string }[];
+    mappings?: { prefix: string; remote: string; token?: string }[];
+}
+
+// SyncRemoteStatus / SyncStatus mirror internal/sync.Status. Surfaced in
+// the settings panel so a bad token or a merge conflict is visible
+// instead of failing silently in the background.
+interface SyncRemoteStatus {
+    remote: string;
+    prefix: string;
+    last_sync?: string;
+    last_error?: string;
+    conflicts?: string[];
+}
+
+interface SyncStatus {
+    enabled: boolean;
+    remotes?: SyncRemoteStatus[];
 }
 
 // DigestSettings mirrors internal/config.DigestConfig. All fields are
@@ -58,6 +78,11 @@ async function getConfigPath(): Promise<string> {
     return data.path;
 }
 
+async function loadSyncStatus(): Promise<SyncStatus> {
+    const res = await fetch('/api/sync/status');
+    return res.json();
+}
+
 async function requestRestart(): Promise<void> {
     await fetch('/api/restart', { method: 'POST' });
 }
@@ -73,6 +98,7 @@ export function App() {
     const [configPath, setConfigPath] = useState('');
     const [settingsDirty, setSettingsDirty] = useState(false);
     const [settingsSaved, setSettingsSaved] = useState(false);
+    const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
 
     // Reindex state (settings panel). reindexResult is null until the
     // first run completes; reindexError holds the most recent failure.
@@ -304,10 +330,21 @@ export function App() {
             setSettingsDirty(false);
             setSettingsSaved(false);
             setCurrent(null);
+            loadSyncStatus().then(setSyncStatus).catch(() => setSyncStatus(null));
         } catch (e) {
             console.error('Failed to load settings:', e);
         }
     };
+
+    // While the settings panel is open, refresh sync status on an
+    // interval so background pull/push errors and conflicts surface
+    // without a manual reload.
+    useEffect(() => {
+        if (!showSettings) return;
+        const tick = () => loadSyncStatus().then(setSyncStatus).catch(() => {});
+        const id = setInterval(tick, 5000);
+        return () => clearInterval(id);
+    }, [showSettings]);
 
     const handleSettingsSave = async () => {
         if (!settings) return;
@@ -316,6 +353,7 @@ export function App() {
             setSettings(saved);
             setSettingsDirty(false);
             setSettingsSaved(true);
+            loadSyncStatus().then(setSyncStatus).catch(() => {});
         } catch (e) {
             console.error('Failed to save settings:', e);
         }
@@ -614,6 +652,18 @@ export function App() {
                                 </div>
 
                                 <div class="settings-field">
+                                    <label>Access Token</label>
+                                    <div class="hint">Optional personal access token (PAT) for HTTPS git auth when gh/keychain/SSH isn't set up. Stored locally and never displayed; leave blank to keep the machine's existing credentials, or replace to change. Clear the field to remove a saved token.</div>
+                                    <input
+                                        type="password"
+                                        autoComplete="off"
+                                        value={settings.sync.token || ''}
+                                        onInput={(e) => updateSync('token', (e.target as HTMLInputElement).value)}
+                                        placeholder="ghp_… (leave blank to keep existing)"
+                                    />
+                                </div>
+
+                                <div class="settings-field">
                                     <label>Sync Interval</label>
                                     <div class="hint">How often to pull and push (e.g. 30s, 1m, 5m)</div>
                                     <input
@@ -632,6 +682,27 @@ export function App() {
                                             {settings.sync.mappings.map(m => (
                                                 <div key={m.prefix} class="settings-mapping">
                                                     <code>{m.prefix}</code> &rarr; <code>{m.remote}</code>
+                                                    {m.token ? <span class="settings-mapping-token" title="This mapping has its own access token"> &#128274;</span> : null}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {syncStatus && syncStatus.remotes && syncStatus.remotes.length > 0 && (
+                                    <div class="settings-field">
+                                        <label>Sync Status</label>
+                                        <div class="hint">Live pull/push state, refreshed every few seconds</div>
+                                        <div class="settings-sync-status">
+                                            {syncStatus.remotes.map(rs => (
+                                                <div key={rs.remote} class="settings-sync-remote">
+                                                    <div class="settings-sync-remote-name"><code>{rs.remote}</code></div>
+                                                    {rs.last_error
+                                                        ? <div class="settings-sync-error">&#9888; {rs.last_error}</div>
+                                                        : <div class="settings-sync-ok">&#10003; {rs.last_sync ? `Last synced ${new Date(rs.last_sync).toLocaleString()}` : 'Waiting for first sync…'}</div>}
+                                                    {rs.conflicts && rs.conflicts.length > 0 && (
+                                                        <div class="settings-sync-conflicts">Conflicts: {rs.conflicts.join(', ')}</div>
+                                                    )}
                                                 </div>
                                             ))}
                                         </div>

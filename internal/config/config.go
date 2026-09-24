@@ -41,6 +41,14 @@ type SyncMapping struct {
 	Prefix    string        `json:"prefix"`
 	Remote    string        `json:"remote"`
 	Direction SyncDirection `json:"direction,omitempty"`
+	// Token is an optional personal access token used to authenticate
+	// HTTPS git operations for this mapping's remote. When empty, the
+	// SyncConfig-level Token is used; when that's empty too, sync falls
+	// back to the machine's existing git credentials (helpers, keychain,
+	// gh, SSH). Injected via GIT_ASKPASS so it never lands in the shadow
+	// clone's .git/config or a process argument. Redacted by the settings
+	// API — it is never echoed back to the browser.
+	Token string `json:"token,omitempty"`
 	// LFS, when true, configures the synced shadow clone to track
 	// the patterns in LFSPatterns via git-lfs. Useful when binary
 	// assets (uploaded via the image-support tools) would otherwise
@@ -69,10 +77,33 @@ func DefaultLFSPatterns() []string {
 
 // SyncConfig holds git sync settings.
 type SyncConfig struct {
-	Enabled  bool          `json:"enabled"`
-	Default  string        `json:"default"`
+	Enabled bool   `json:"enabled"`
+	Default string `json:"default"`
+	// Token is the default personal access token used to authenticate
+	// HTTPS git operations for any remote that doesn't set its own
+	// per-mapping Token. Empty means "use the machine's existing git
+	// credentials" (the historical behavior). Injected via GIT_ASKPASS,
+	// and redacted by the settings API — never echoed to the browser.
+	Token    string        `json:"token,omitempty"`
 	Interval string        `json:"interval"`
 	Mappings []SyncMapping `json:"mappings,omitempty"`
+}
+
+// TokenForRemote returns the access token to use for the given remote.
+// A non-empty token on any mapping for that remote wins (first match);
+// otherwise the SyncConfig-level default Token is used. Returns "" when
+// no token is configured, which the sync engine treats as "fall back to
+// the machine's existing git credentials".
+func (s *SyncConfig) TokenForRemote(remote string) string {
+	if remote == "" {
+		return ""
+	}
+	for _, m := range s.Mappings {
+		if m.Remote == remote && m.Token != "" {
+			return m.Token
+		}
+	}
+	return s.Token
 }
 
 // ParseInterval returns the sync interval as a time.Duration.
@@ -153,6 +184,39 @@ func (s *SyncConfig) AddMappingWithLFS(prefix, remote string, direction SyncDire
 		Direction:   direction,
 		LFS:         lfs,
 		LFSPatterns: patterns,
+	})
+}
+
+// AddMappingFull is the superset of AddMappingWithLFS that also manages
+// the per-mapping access Token. Remote, direction, and LFS settings are
+// replaced on every call (a re-registration). The token is only
+// overwritten when a non-empty token is supplied; passing "" preserves
+// any existing token so a re-registration that omits the token doesn't
+// silently drop stored credentials.
+func (s *SyncConfig) AddMappingFull(prefix, remote string, direction SyncDirection, lfs bool, patterns []string, token string) {
+	direction = direction.Normalize()
+	if lfs && patterns == nil {
+		patterns = DefaultLFSPatterns()
+	}
+	for i, m := range s.Mappings {
+		if m.Prefix == prefix {
+			s.Mappings[i].Remote = remote
+			s.Mappings[i].Direction = direction
+			s.Mappings[i].LFS = lfs
+			s.Mappings[i].LFSPatterns = patterns
+			if token != "" {
+				s.Mappings[i].Token = token
+			}
+			return
+		}
+	}
+	s.Mappings = append(s.Mappings, SyncMapping{
+		Prefix:      prefix,
+		Remote:      remote,
+		Direction:   direction,
+		LFS:         lfs,
+		LFSPatterns: patterns,
+		Token:       token,
 	})
 }
 
