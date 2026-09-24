@@ -39,6 +39,17 @@ type SyncRegistrarWithLFS interface {
 	RegisterMappingWithLFS(prefix, remote string, direction config.SyncDirection, lfs bool, lfsPatterns []string) error
 }
 
+// SyncRegistrarWithToken is satisfied by sync managers that also accept
+// a per-mapping access token. MCP's register_sync tool prefers this when
+// available so an agent can supply a PAT for a remote whose credentials
+// aren't otherwise resolvable (gh/keychain not configured). Falls back to
+// SyncRegistrarWithLFS / SyncRegistrar when unavailable, dropping the token
+// with a logged warning. Kept as flat args for the same reason as the LFS
+// variant — no cross-package struct dependency.
+type SyncRegistrarWithToken interface {
+	RegisterMappingWithToken(prefix, remote string, direction config.SyncDirection, lfs bool, lfsPatterns []string, token string) error
+}
+
 // Server wraps a Wiki and exposes it as MCP tools.
 type Server struct {
 	wiki   *wiki.Wiki
@@ -127,7 +138,7 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "register_sync",
-		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Direction defaults to 'bidirectional' (pull+push); use 'pull' to mirror an upstream repo read-only into the wiki, or 'push' to publish wiki content to a remote without ever pulling from it. Re-registering the same prefix replaces the previous direction. Auth uses the machine's existing git credentials.",
+		Description: "Register a wiki path prefix to sync with a git remote. Pages under this prefix will be synced to the given repository's wiki. The remote URL should be a git clone URL (e.g. https://github.com/user/repo.wiki.git). Direction defaults to 'bidirectional' (pull+push); use 'pull' to mirror an upstream repo read-only into the wiki, or 'push' to publish wiki content to a remote without ever pulling from it. Re-registering the same prefix replaces the previous direction. Auth normally uses the machine's existing git credentials (git credential helpers, keychain, gh, or SSH). If those aren't available, pass 'token' with a personal access token (PAT) to authenticate HTTPS operations for this remote; it's stored in config and injected securely, never written into the remote URL. Omit 'token' on re-registration to keep a previously stored token.",
 	}, s.registerSync)
 
 	mcp.AddTool(s.server, &mcp.Tool{
@@ -194,6 +205,10 @@ type registerSyncInput struct {
 	// LFSPatterns, when set, overrides the default LFS .gitattributes
 	// patterns (the browser-renderable image set).
 	LFSPatterns []string `json:"lfs_patterns,omitempty" jsonschema:"optional .gitattributes patterns to route through LFS. If LFS=true and this is empty, the default image-format set is used."`
+	// Token is an optional PAT for authenticating HTTPS git operations
+	// on this remote when the machine's own git credentials aren't
+	// usable. Omit to keep any previously stored token for the prefix.
+	Token string `json:"token,omitempty" jsonschema:"optional personal access token (PAT) to authenticate HTTPS git sync for this remote. Use when gh/keychain/SSH auth isn't available. Stored in config and injected via a credential helper — never written into the remote URL. Omit on re-registration to preserve an existing token."`
 }
 
 type moveInput struct {
@@ -408,7 +423,7 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 		direction = config.SyncBidirectional
 	}
 
-	if err := s.registerSyncMapping(input.Prefix, input.Remote, direction, input.LFS, input.LFSPatterns); err != nil {
+	if err := s.registerSyncMapping(input.Prefix, input.Remote, direction, input.LFS, input.LFSPatterns, input.Token); err != nil {
 		slog.Error("tool.register_sync failed",
 			slog.String("prefix", input.Prefix),
 			slog.String("direction", string(direction)),
@@ -423,6 +438,7 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 		slog.String("remote", input.Remote),
 		slog.String("direction", string(direction)),
 		slog.Bool("lfs", input.LFS),
+		slog.Bool("token", input.Token != ""),
 	)
 
 	msg := fmt.Sprintf("Sync registered: pages under '%s' will sync to %s", input.Prefix, input.Remote)
@@ -437,6 +453,9 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 	if input.LFS {
 		msg += "; binary assets routed through git-lfs"
 	}
+	if input.Token != "" {
+		msg += "; authenticating with the provided access token"
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: msg},
@@ -449,7 +468,15 @@ func (s *Server) registerSync(_ context.Context, _ *mcp.CallToolRequest, input r
 // back-compat variant (which silently drops LFS settings). Logs a
 // warning when LFS was requested but the registrar can't honor it
 // so the operator isn't misled about the resulting behavior.
-func (s *Server) registerSyncMapping(prefix, remote string, direction config.SyncDirection, lfs bool, patterns []string) error {
+func (s *Server) registerSyncMapping(prefix, remote string, direction config.SyncDirection, lfs bool, patterns []string, token string) error {
+	if rt, ok := s.sync.(SyncRegistrarWithToken); ok {
+		return rt.RegisterMappingWithToken(prefix, remote, direction, lfs, patterns, token)
+	}
+	if token != "" {
+		slog.Warn("register_sync token supplied but registrar doesn't support it; ignoring token",
+			slog.String("prefix", prefix),
+			slog.String("remote", remote))
+	}
 	if rw, ok := s.sync.(SyncRegistrarWithLFS); ok {
 		return rw.RegisterMappingWithLFS(prefix, remote, direction, lfs, patterns)
 	}

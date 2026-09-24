@@ -184,7 +184,7 @@ func TestParseCloudRefresh(t *testing.T) {
 		// Floor: anything < 30s clamps to the default to protect a
 		// busy wiki from CPU churn.
 		{"1s", 5 * time.Minute},
-		{"", 5 * time.Minute},   // empty → default
+		{"", 5 * time.Minute},     // empty → default
 		{"junk", 5 * time.Minute}, // invalid → default
 	}
 	for _, tc := range tests {
@@ -248,5 +248,58 @@ func TestDigestConfig_BackwardsCompatible(t *testing.T) {
 	}
 	if loaded.Digest.ParseCloudRefresh() != 5*time.Minute {
 		t.Errorf("expected default 5m on legacy config, got %v", loaded.Digest.ParseCloudRefresh())
+	}
+}
+
+func TestTokenForRemote(t *testing.T) {
+	s := &SyncConfig{
+		Default: "https://example.com/default.git",
+		Token:   "default-tok",
+		Mappings: []SyncMapping{
+			{Prefix: "a", Remote: "https://example.com/a.git", Token: "a-tok"},
+			{Prefix: "b", Remote: "https://example.com/b.git"}, // no token → default
+		},
+	}
+	cases := []struct {
+		remote string
+		want   string
+	}{
+		{"https://example.com/a.git", "a-tok"},       // per-mapping override wins
+		{"https://example.com/b.git", "default-tok"}, // falls back to default
+		{"https://example.com/default.git", "default-tok"},
+		{"https://example.com/unknown.git", "default-tok"}, // unknown → default
+		{"", ""}, // empty remote → no token
+	}
+	for _, c := range cases {
+		if got := s.TokenForRemote(c.remote); got != c.want {
+			t.Errorf("TokenForRemote(%q) = %q, want %q", c.remote, got, c.want)
+		}
+	}
+
+	// With no default token, an unmapped remote resolves to "".
+	s.Token = ""
+	if got := s.TokenForRemote("https://example.com/b.git"); got != "" {
+		t.Errorf("expected empty token with no default, got %q", got)
+	}
+}
+
+func TestAddMappingFullPreservesTokenWhenEmpty(t *testing.T) {
+	s := &SyncConfig{}
+	s.AddMappingFull("p", "https://example.com/p.git", SyncBidirectional, false, nil, "secret")
+	if s.Mappings[0].Token != "secret" {
+		t.Fatalf("token not set on insert: %q", s.Mappings[0].Token)
+	}
+	// Re-register without a token: existing token must be preserved.
+	s.AddMappingFull("p", "https://example.com/p.git", SyncPull, false, nil, "")
+	if s.Mappings[0].Token != "secret" {
+		t.Errorf("empty token overwrote stored token: %q", s.Mappings[0].Token)
+	}
+	if s.Mappings[0].Direction != SyncPull {
+		t.Errorf("direction not updated: %q", s.Mappings[0].Direction)
+	}
+	// Re-register with a new token: it replaces the old one.
+	s.AddMappingFull("p", "https://example.com/p.git", SyncPull, false, nil, "rotated")
+	if s.Mappings[0].Token != "rotated" {
+		t.Errorf("token not rotated: %q", s.Mappings[0].Token)
 	}
 }

@@ -686,6 +686,52 @@ mark {
     padding: 2px 6px;
 }
 
+.settings-mapping-token {
+    font-size: 12px;
+}
+
+.settings-sync-status {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-sync-remote {
+    font-size: 13px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--code-bg);
+}
+
+.settings-sync-remote-name {
+    margin-bottom: 4px;
+}
+
+.settings-sync-remote-name code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.settings-sync-ok {
+    color: var(--fg-muted);
+    font-size: 12px;
+}
+
+.settings-sync-error {
+    color: var(--danger, #d1242f);
+    font-size: 12px;
+    word-break: break-word;
+}
+
+.settings-sync-conflicts {
+    margin-top: 4px;
+    color: var(--danger, #d1242f);
+    font-size: 12px;
+}
+
 /* --- Empty state --- */
 
 .empty {

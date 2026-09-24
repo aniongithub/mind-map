@@ -69,6 +69,11 @@ type syncTarget struct {
 	// clone and writes .gitattributes routing lfsPatterns through it.
 	lfs         bool
 	lfsPatterns []string
+	// token is the resolved access token for this remote (per-mapping
+	// override or the sync-level default). Empty means "use the
+	// machine's existing git credentials". Fed to git via GIT_ASKPASS
+	// on network operations so it never touches disk or a process arg.
+	token string
 
 	mu        sync.Mutex
 	lastSync  time.Time
@@ -181,6 +186,10 @@ type MappingOptions struct {
 	// (non-nil) slice is "track nothing" — usable only as a stub
 	// for later configuration.
 	LFSPatterns []string
+	// Token is an optional access token for this mapping's remote.
+	// Empty preserves any token already stored for the prefix, so a
+	// re-registration that omits the token doesn't drop credentials.
+	Token string
 }
 
 // RegisterMappingWithOptions is the full form of RegisterMapping that
@@ -191,7 +200,7 @@ func (m *Manager) RegisterMappingWithOptions(prefix, remote string, opts Mapping
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.cfg.Sync.AddMappingWithLFS(prefix, remote, opts.Direction, opts.LFS, opts.LFSPatterns)
+	m.cfg.Sync.AddMappingFull(prefix, remote, opts.Direction, opts.LFS, opts.LFSPatterns, opts.Token)
 	if err := config.Save(m.cfgPath, m.cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -216,6 +225,20 @@ func (m *Manager) RegisterMappingWithLFS(prefix, remote string, direction config
 		Direction:   direction,
 		LFS:         lfs,
 		LFSPatterns: lfsPatterns,
+	})
+}
+
+// RegisterMappingWithToken is the token-aware variant that satisfies the
+// mcp package's SyncRegistrarWithToken interface. Like RegisterMappingWithLFS
+// it keeps a flat argument shape so the mcp package needs no cross-package
+// struct. An empty token preserves any credential already stored for the
+// prefix.
+func (m *Manager) RegisterMappingWithToken(prefix, remote string, direction config.SyncDirection, lfs bool, lfsPatterns []string, token string) error {
+	return m.RegisterMappingWithOptions(prefix, remote, MappingOptions{
+		Direction:   direction,
+		LFS:         lfs,
+		LFSPatterns: lfsPatterns,
+		Token:       token,
 	})
 }
 
@@ -309,11 +332,13 @@ func (m *Manager) rebuildTargetsLocked() {
 
 	// Create or update targets
 	for remote, ri := range remotes {
+		token := m.cfg.Sync.TokenForRemote(remote)
 		if t, exists := m.targets[remote]; exists {
 			t.prefixes = ri.prefixes
 			t.direction = ri.direction
 			t.lfs = ri.lfs
 			t.lfsPatterns = ri.lfsPatterns
+			t.token = token
 		} else {
 			dirName := sanitizeDirName(remote)
 			m.targets[remote] = &syncTarget{
@@ -323,6 +348,7 @@ func (m *Manager) rebuildTargetsLocked() {
 				direction:   ri.direction,
 				lfs:         ri.lfs,
 				lfsPatterns: ri.lfsPatterns,
+				token:       token,
 			}
 		}
 	}
@@ -444,7 +470,7 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 	// (from phase 1) with new remote work. Pull-only also needs the merge
 	// to advance HEAD; push-only needs it as a fast-forward base so the
 	// later push isn't rejected.
-	if err := gitCmd(ctx, t.cloneDir, "fetch", "origin"); err != nil {
+	if err := gitCmdAuth(ctx, t.cloneDir, t.token, "fetch", "origin"); err != nil {
 		t.setError(fmt.Sprintf("fetch: %v", err))
 		return
 	}
@@ -478,7 +504,7 @@ func (m *Manager) syncTarget(ctx context.Context, t *syncTarget) {
 		// Only push if we have any commits at all (a fresh clone with no
 		// initial pull and no local content will have none).
 		if err := gitCmd(ctx, t.cloneDir, "rev-parse", "HEAD"); err == nil {
-			if err := gitCmd(ctx, t.cloneDir, "push", "-u", "origin", "main"); err != nil {
+			if err := gitCmdAuth(ctx, t.cloneDir, t.token, "push", "-u", "origin", "main"); err != nil {
 				t.setError(fmt.Sprintf("push: %v", err))
 				return
 			}
@@ -687,6 +713,7 @@ func syncableRel(rel string) bool {
 // --- helpers ---
 
 func (t *syncTarget) setError(msg string) {
+	msg = scrubToken(msg, t.token)
 	slog.Warn("sync error", slog.String("remote", t.remote), slog.String("error", msg))
 	t.mu.Lock()
 	t.lastError = msg
@@ -694,14 +721,87 @@ func (t *syncTarget) setError(msg string) {
 }
 
 func gitCmd(ctx context.Context, dir string, args ...string) error {
+	return gitCmdAuth(ctx, dir, "", args...)
+}
+
+// gitCmdAuth runs a git command, optionally authenticating with a
+// personal access token over HTTPS. When token is non-empty it:
+//   - resets the inherited credential-helper chain (-c credential.helper=)
+//     so a broken helper (gh/keychain) can't shadow our token; and
+//   - installs a GIT_ASKPASS helper that feeds git the username
+//     "x-access-token" and the token as the password.
+//
+// The token is passed to the helper via an environment variable, so it
+// never lands in the shadow clone's .git/config, the remote URL, or the
+// process argument list (where `ps` could see it). Any token that does
+// leak into git's output is scrubbed from the returned error.
+func gitCmdAuth(ctx context.Context, dir, token string, args ...string) error {
+	var env []string
+	if token != "" {
+		cleanup, askEnv, err := newAskpassHelper(token)
+		if err != nil {
+			return fmt.Errorf("prepare git auth: %w", err)
+		}
+		defer cleanup()
+		env = askEnv
+		// Neutralize inherited credential helpers so our askpass wins.
+		args = append([]string{"-c", "credential.helper="}, args...)
+	}
+
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Env, env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+		msg := scrubToken(strings.TrimSpace(string(out)), token)
+		return fmt.Errorf("git %s: %s: %w", scrubToken(strings.Join(args, " "), token), msg, err)
 	}
 	return nil
+}
+
+// newAskpassHelper writes a throwaway GIT_ASKPASS script that answers
+// git's username/password prompts from the environment, returning the
+// env to run git with and a cleanup func that removes the script. The
+// token itself is only ever placed in the environment (MIND_MAP_SYNC_TOKEN),
+// never written into the script file.
+func newAskpassHelper(token string) (cleanup func(), env []string, err error) {
+	f, err := os.CreateTemp("", "mind-map-askpass-*.sh")
+	if err != nil {
+		return nil, nil, err
+	}
+	// $1 is git's prompt, e.g. "Username for 'https://github.com': " or
+	// "Password for 'https://x-access-token@github.com': ". Answer the
+	// username with a fixed value and everything else with the token.
+	script := "#!/bin/sh\ncase \"$1\" in\n*[Uu]sername*) printf '%s' \"x-access-token\" ;;\n*) printf '%s' \"$MIND_MAP_SYNC_TOKEN\" ;;\nesac\n"
+	if _, err := f.WriteString(script); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, nil, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return nil, nil, err
+	}
+	if err := os.Chmod(f.Name(), 0o700); err != nil {
+		os.Remove(f.Name())
+		return nil, nil, err
+	}
+	cleanup = func() { os.Remove(f.Name()) }
+	env = []string{
+		"GIT_ASKPASS=" + f.Name(),
+		"MIND_MAP_SYNC_TOKEN=" + token,
+	}
+	return cleanup, env, nil
+}
+
+// scrubToken redacts a token from a string so it can't leak into error
+// messages, logs, or the /api/sync/status payload. No-op for empty tokens.
+func scrubToken(s, token string) string {
+	if token == "" || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, token, "***")
 }
 
 func checkConflicts(ctx context.Context, dir string) []string {
