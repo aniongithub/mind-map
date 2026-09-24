@@ -3,27 +3,14 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-  "remoteUser": "vscode",
+  "remoteUser": "node",
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "latest",
       "golangciLintVersion": "1.64.8"
     },
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "lts"
-    },
     "ghcr.io/devcontainers/features/sshd:1": {
       "version": "latest"
-    },
-    // Playwright + browsers + Linux runtime libs in one shot. The
-    // feature's install.sh runs `npx playwright install --with-deps`
-    // as the remote user, so the browser binaries land in
-    // /home/vscode/.cache/ms-playwright/ and the apt-side runtime
-    // libs (libnss3, libgbm1, etc.) are pulled in too. Reproducible
-    // and dramatically simpler than maintaining the dep list in our
-    // Dockerfile.
-    "ghcr.io/schlich/devcontainer-features/playwright:0": {
-      "browsers": "chromium"
     }
   },
   // Runs on the HOST before the container is created/started. Picks a
@@ -34,7 +21,15 @@
   // [[preferences/devcontainer-ports]] for the full rationale and the
   // consumer recipes (launch.json, tasks.json, host scripts).
   "initializeCommand": ".devcontainer/initializeCommand.sh",
-  "postCreateCommand": "git config --global --add safe.directory /workspaces/mind-map && go version && node --version && { CHROME=$(find ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) && [ -n \"$CHROME\" ] && sudo ln -sf \"$CHROME\" /usr/local/bin/chromium || true; }",
+  // NPM_CONFIG_REGISTRY is passed through from the host environment so a
+  // machine behind a corporate proxy (whose npm registry differs from the
+  // public one) can still `npm install` at postAttach. It references npm's
+  // own standard variable — never a hardcoded URL — so it's empty and
+  // harmless on a public/CI machine, where npm uses its default registry.
+  "remoteEnv": {
+    "NPM_CONFIG_REGISTRY": "${localEnv:NPM_CONFIG_REGISTRY}"
+  },
+  "postCreateCommand": "git config --global --add safe.directory /workspaces/mind-map && go version && node --version && chromium --version",
   "postAttachCommand": "npm install --prefix webui",
   "customizations": {
     "vscode": {
@@ -77,11 +72,11 @@
     }
   },
   "mounts": [
-    // Bind-mount the workspace's .mind-map/ as the vscode user's home
+    // Bind-mount the workspace's .mind-map/ as the node user's home
     // .mind-map/ so the committed config.json (with the pull-only sync
     // mapping to the GitHub wiki) is what mind-map serve reads. The
     // wiki dir itself (.mind-map/wiki/) is gitignored and populated by
     // sync on first launch.
-    "source=${localWorkspaceFolder}/.mind-map,target=/home/vscode/.mind-map,type=bind,consistency=cached"
+    "source=${localWorkspaceFolder}/.mind-map,target=/home/node/.mind-map,type=bind,consistency=cached"
   ]
 }
