@@ -14,8 +14,9 @@
     }
   },
   // Runs on the HOST before the container is created/started. Picks a
-  // free TCP port, writes it to .devcontainer/ports.env. The container
-  // runs with --network host (see runArgs) so the same port number is
+  // free TCP port and writes it to .devcontainer/ports.env. Launch and
+  // task configurations read that file directly. The container runs
+  // with --network host (see runArgs) so the same port number is
   // both the in-container bind and the host-visible address — no port
   // forwarding involved. See the wiki page
   // [[preferences/devcontainer-ports]] for the full rationale and the
@@ -57,13 +58,10 @@
   // server binds directly on the host's network namespace at whatever
   // port initializeCommand picked.
   //
-  // --env-file injects MIND_MAP_HOST_PORT into the container so the
-  // mind-map binary (which reads it via `serve --addr`) listens on
-  // the right port. host-side consumers (launch.json, scripts) read
-  // the same file directly.
+  // Consumers read .devcontainer/ports.env at execution time instead
+  // of relying on container environment captured only at creation.
   "runArgs": [
-    "--network", "host",
-    "--env-file", ".devcontainer/ports.env"
+    "--network", "host"
   ],
   "portsAttributes": {
     "4242": {

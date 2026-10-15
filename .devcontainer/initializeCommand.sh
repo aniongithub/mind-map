@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Runs on the HOST (not in the container) before docker run. Picks a
 # free TCP port for the mind-map server and writes it to
-# .devcontainer/ports.env. The value is consumed in two places:
-#
-#   1. Inside the container, via runArgs --env-file, so the mind-map
-#      binary's `serve --addr` reads $MIND_MAP_HOST_PORT.
-#   2. On the host, by tools (launch.json, the screenshot harness,
-#      ad-hoc curl) that need to know what URL to hit.
+# .devcontainer/ports.env. Launch configurations, tasks, the screenshot
+# harness, and ad-hoc commands read the file when they run. Keeping the
+# file as the single source of truth avoids stale container environment
+# values when an existing devcontainer is restarted.
 #
 # Because the container runs with --network host (see devcontainer.json
 # runArgs), there is no port forwarding involved — the container binds
@@ -47,8 +45,7 @@ PORT=$(pick_port)
 # devcontainer CLI was invoked from.
 cd "$(dirname "$0")"
 
-# `--env-file` (used in runArgs) accepts bare KEY=VALUE lines. Don't
-# quote the value — docker chokes on that.
+# Keep this shell-sourceable for tasks and simple to parse from launch.json.
 cat > ports.env <<EOF
 MIND_MAP_HOST_PORT=$PORT
 EOF

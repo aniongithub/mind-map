@@ -41,6 +41,7 @@ func (w *Wiki) ExportPages(ctx context.Context, startPage string, depth int) ([]
 
 	// BFS traversal of the wikilink graph
 	visited := map[string]bool{startPage: true}
+	orderedPaths := []string{startPage}
 	queue := []string{startPage}
 	currentDepth := 0
 
@@ -62,6 +63,7 @@ func (w *Wiki) ExportPages(ctx context.Context, startPage string, depth int) ([]
 			for _, target := range links {
 				if !visited[target] {
 					visited[target] = true
+					orderedPaths = append(orderedPaths, target)
 					nextLevel = append(nextLevel, target)
 				}
 			}
@@ -70,9 +72,10 @@ func (w *Wiki) ExportPages(ctx context.Context, startPage string, depth int) ([]
 		currentDepth++
 	}
 
-	// Fetch full content for all visited pages
+	// Fetch full content in BFS discovery order. The selected page is always
+	// first, followed by linked pages in the order they appear in source.
 	var pages []ExportPage
-	for path := range visited {
+	for _, path := range orderedPaths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -122,4 +125,3 @@ func (w *Wiki) exportOnePage(ctx context.Context, pagePath string) (*ExportPage,
 
 	return &p, nil
 }
-

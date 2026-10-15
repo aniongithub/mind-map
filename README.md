@@ -100,7 +100,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 | `get_backlinks` | Get all pages that link to a given page |
 | `register_sync` | Register a wiki path prefix to sync with a git remote |
 | `reindex_wiki` | Force a reindex pass against on-disk markdown (rarely needed; useful after edits made outside the wiki API) |
-| `export_pages` | Export a page (and linked pages up to N hops) as zip or PDF |
+| `export_pages` | Export a page (and linked pages up to N hops) as Markdown zip, PDF, or Word document |
 
 ## Wiki Features
 
@@ -111,7 +111,7 @@ Both modes use the same wiki engine and the same wiki directory (`~/.mind-map/wi
 - **Full-text search**: SQLite FTS5 with ranked results and snippets
 - **Multi-process safe**: SQLite page locking for concurrent agent access
 - **Git sync**: sync wiki pages to GitHub repo wikis via configurable mappings
-- **Export / Share**: export pages as zip or PDF — see below
+- **Export / Share**: export pages as a Markdown zip, PDF, or Word document — see below
 
 ## Export & Share
 
@@ -133,7 +133,10 @@ Export is **pluggable** — formats register themselves at startup:
 | Format | Description | Requirements |
 |--------|-------------|--------------|
 | **zip** | Archive of markdown files + assets | None |
+| **docx** | Microsoft Word document with rendered Markdown, contents, and embedded images | None |
 | **pdf** | Multi-page PDF with table of contents | Chrome, Edge, or Chromium on `$PATH` |
+
+DOCX export uses the MIT-licensed [docxgo](https://github.com/mmonterroca/docxgo) library, with no Word installation or external converter required. It preserves headings, emphasis, lists, task lists, quotes, code blocks, tables, and PNG/JPEG/GIF images. External links remain clickable; wikilinks to exported pages become in-document hyperlinks, while wikilinks outside the export are shown as non-clickable dark gray underlined text. Mermaid blocks are rendered as embedded PNGs when Chromium and the local Mermaid bundle are available, with a code-block fallback otherwise.
 
 PDF export uses [chromedp](https://github.com/chromedp/chromedp) to render markdown → HTML → PDF via a headless browser. It includes a clickable TOC, embedded images, and a print-friendly stylesheet. The PDF sharer only registers if a supported browser is detected — no browser, no PDF option.
 
@@ -143,13 +146,13 @@ PDF export uses [chromedp](https://github.com/chromedp/chromedp) to render markd
 
 **REST API**:
 ```
-GET /api/export?format=zip&page=projects/my-project&depth=1
+GET /api/export?format=docx&page=projects/my-project&depth=1
 GET /api/export/formats   # list available formats with settings schemas
 ```
 
 **MCP tool**:
 ```
-export_pages(format: "pdf", page: "architecture/auth", depth: -1)
+export_pages(format: "docx", page: "architecture/auth", depth: -1)
 ```
 
 ### Adding new formats
@@ -164,7 +167,7 @@ The built-in web UI is a lightning-fast, Metro-inspired, chromeless Preact app:
 - Markdown rendering with wikilinks as clickable links
 - Backlinks section on every page
 - Edit mode with raw markdown editor
-- Export / share panel for zip and PDF export
+- Export / share panel for Markdown zip, Word document, and PDF export
 - Interactive graph view of the wiki link structure
 - Dark / light theme toggle
 
