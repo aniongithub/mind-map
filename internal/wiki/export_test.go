@@ -2,7 +2,6 @@ package wiki
 
 import (
 	"context"
-	"sort"
 	"testing"
 )
 
@@ -38,8 +37,7 @@ func TestExportPages_OneHop(t *testing.T) {
 	}
 
 	names := pageNames(pages)
-	sort.Strings(names)
-	expected := []string{"index", "people/alice", "projects/mind-map"}
+	expected := []string{"index", "projects/mind-map", "people/alice"}
 	if len(names) != len(expected) {
 		t.Fatalf("expected %v, got %v", expected, names)
 	}

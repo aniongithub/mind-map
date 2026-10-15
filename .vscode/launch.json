@@ -15,16 +15,17 @@
             // The devcontainer runs with --network host (see
             // .devcontainer/devcontainer.json), so the in-container
             // port IS the host port. initializeCommand.sh picks the
-            // value at create time and writes it to
-            // .devcontainer/ports.env; --env-file in runArgs makes
-            // $MIND_MAP_HOST_PORT available in the container's env.
+            // value at startup and writes it to
+            // .devcontainer/ports.env. Both the server and browser read
+            // the same file-backed input so container restarts cannot leave
+            // one side using a stale environment value.
             // See [[preferences/devcontainer-ports]].
             "name": "mind-map Server",
             "type": "go",
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", "0.0.0.0:${env:MIND_MAP_HOST_PORT}", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", "0.0.0.0:${input:mindMapHostPort}", "--webui", "${workspaceFolder}/webui/dist"],
             "preLaunchTask": "build-webui"
         },
         {
@@ -33,7 +34,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/cmd/mind-map",
-            "args": ["serve", "--addr", "0.0.0.0:${env:MIND_MAP_HOST_PORT}", "--webui", "${workspaceFolder}/webui/dist"],
+            "args": ["serve", "--addr", "0.0.0.0:${input:mindMapHostPort}", "--webui", "${workspaceFolder}/webui/dist"],
         },
         {
             "name": "mind-map (stdio)",
@@ -49,10 +50,11 @@
             // .devcontainer/ports.env so the URL tracks whatever value
             // initializeCommand picked.
             "name": "WebUI",
-            "type": "chrome",
+            // Uses VS Code's built-in JavaScript debugger. The legacy
+            // msjsdiag.debugger-for-chrome extension is not required.
+            "type": "pwa-chrome",
             "request": "launch",
             "browserLaunchLocation": "ui",
-            "runtimeExecutable": "stable",
             "url": "http://localhost:${input:mindMapHostPort}",
             "webRoot": "${workspaceFolder}/webui",
             "preLaunchTask": "waitForServer",

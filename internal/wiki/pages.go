@@ -582,7 +582,7 @@ func (w *Wiki) releaseLock(pagePath string) {
 // --- internal helpers ---
 
 func (w *Wiki) getLinks(ctx context.Context, pagePath string) ([]string, error) {
-	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ? AND kind = 'link'", pagePath)
+	rows, err := w.db.QueryContext(ctx, "SELECT target FROM links WHERE source = ? AND kind = 'link' ORDER BY rowid", pagePath)
 	if err != nil {
 		return nil, err
 	}
