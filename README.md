@@ -136,7 +136,7 @@ Export is **pluggable** — formats register themselves at startup:
 | **docx** | Microsoft Word document with rendered Markdown, contents, and embedded images | None |
 | **pdf** | Multi-page PDF with table of contents | Chrome, Edge, or Chromium on `$PATH` |
 
-DOCX export uses the MIT-licensed [docxgo](https://github.com/mmonterroca/docxgo) library, with no Word installation or external converter required. It preserves headings, emphasis, lists, task lists, quotes, code blocks, tables, and PNG/JPEG/GIF images. External links remain clickable; wikilinks to exported pages become in-document hyperlinks, while wikilinks outside the export are shown as non-clickable dark gray underlined text. Mermaid blocks are rendered as embedded PNGs when Chromium and the local Mermaid bundle are available, with a code-block fallback otherwise.
+DOCX export uses the MIT-licensed [docxgo](https://github.com/mmonterroca/docxgo) library, with no Word installation or external converter required. It preserves headings, emphasis, lists, task lists, quotes, code blocks, tables, and PNG/JPEG/GIF images. External links remain clickable; wikilinks to exported pages become in-document hyperlinks, while wikilinks outside the export are shown as non-clickable dark gray underlined text. Mermaid blocks are rendered as embedded PNGs when a supported Chromium-based browser is available; release binaries include the Mermaid browser bundle, with a code-block fallback if rendering fails.
 
 PDF export uses [chromedp](https://github.com/chromedp/chromedp) to render markdown → HTML → PDF via a headless browser. It includes a clickable TOC, embedded images, and a print-friendly stylesheet. The PDF sharer only registers if a supported browser is detected — no browser, no PDF option.
 

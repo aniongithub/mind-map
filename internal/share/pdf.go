@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aniongithub/mind-map/webui"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/yuin/goldmark"
@@ -36,9 +38,11 @@ func init() {
 	}
 }
 
-func (p *PDFSharer) Name() string        { return "pdf" }
-func (p *PDFSharer) Description() string  { return "Multi-page PDF with table of contents (requires Chrome/Edge)" }
-func (p *PDFSharer) ContentType() string  { return "application/pdf" }
+func (p *PDFSharer) Name() string { return "pdf" }
+func (p *PDFSharer) Description() string {
+	return "Multi-page PDF with table of contents (requires Chrome/Edge)"
+}
+func (p *PDFSharer) ContentType() string   { return "application/pdf" }
 func (p *PDFSharer) FileExtension() string { return ".pdf" }
 
 func (p *PDFSharer) Settings() SharerSettings {
@@ -226,9 +230,25 @@ func pagesHaveMermaid(pages []Page) bool {
 	return false
 }
 
+// embeddedMermaidJS reads the Mermaid bundle copied into the embedded WebUI.
+func embeddedMermaidJS() []byte {
+	dist := webui.DistFS()
+	if dist == nil {
+		return nil
+	}
+	data, err := fs.ReadFile(dist, "mermaid.min.js")
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // findMermaidJS locates and reads the mermaid.min.js bundle.
-// It checks common locations relative to the working directory and executable.
 func findMermaidJS() []byte {
+	if data := embeddedMermaidJS(); data != nil {
+		return data
+	}
+
 	candidates := []string{
 		// Development: relative to project root (cwd)
 		"webui/node_modules/mermaid/dist/mermaid.min.js",
@@ -347,29 +367,41 @@ func paperDimensions(size string) (width, height float64) {
 	}
 }
 
-// findBrowser scans for a Chromium-based browser on the system.
-func findBrowser() string {
-	// Platform-specific paths to try
-	var candidates []string
-
-	switch runtime.GOOS {
+func browserCandidates(goos, homeDir string) []string {
+	switch goos {
 	case "darwin":
-		candidates = []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		applications := []string{
+			"Google Chrome.app/Contents/MacOS/Google Chrome",
+			"Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"Chromium.app/Contents/MacOS/Chromium",
+			"Brave Browser.app/Contents/MacOS/Brave Browser",
 		}
+		candidates := make([]string, 0, len(applications)*2)
+		for _, application := range applications {
+			candidates = append(candidates, filepath.Join("/Applications", application))
+		}
+		if homeDir != "" {
+			for _, application := range applications {
+				candidates = append(candidates, filepath.Join(homeDir, "Applications", application))
+			}
+		}
+		return candidates
 	case "windows":
-		candidates = []string{
+		return []string{
 			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
 			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 		}
-	default: // linux and others
-		candidates = []string{}
+	default:
+		return nil
 	}
+}
+
+// findBrowser scans for a Chromium-based browser on the system.
+func findBrowser() string {
+	homeDir, _ := os.UserHomeDir()
+	candidates := browserCandidates(runtime.GOOS, homeDir)
 
 	// Also check $PATH for common names
 	pathNames := []string{

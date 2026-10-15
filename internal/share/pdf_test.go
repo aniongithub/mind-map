@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,32 @@ func TestPDFRenderHTMLNoMermaid(t *testing.T) {
 	// Should still have the done signal for the wait loop
 	if !strings.Contains(html, "data-mermaid-done") {
 		t.Error("HTML should still contain data-mermaid-done signal for consistency")
+	}
+}
+
+func TestEmbeddedMermaidJS(t *testing.T) {
+	data := embeddedMermaidJS()
+	if len(data) == 0 {
+		t.Fatal("embedded WebUI does not contain mermaid.min.js")
+	}
+	if !bytes.Contains(data, []byte("mermaid")) {
+		t.Fatal("embedded mermaid.min.js does not look like a Mermaid bundle")
+	}
+}
+
+func TestDarwinBrowserCandidatesIncludeUserApplications(t *testing.T) {
+	got := browserCandidates("darwin", "/Users/tester")
+	want := []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		"/Users/tester/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Users/tester/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+		"/Users/tester/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Users/tester/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("browserCandidates() = %#v, want %#v", got, want)
 	}
 }
