@@ -1,6 +1,7 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   entry: './src/index.tsx',
@@ -39,5 +40,13 @@ module.exports = {
       favicon: path.resolve(__dirname, 'src/assets/favicon.svg'),
     }),
     new MiniCssExtractPlugin({ filename: 'index.css' }),
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: path.resolve(__dirname, 'node_modules/mermaid/dist/mermaid.min.js'),
+          to: 'mermaid.min.js',
+        },
+      ],
+    }),
   ],
 };
